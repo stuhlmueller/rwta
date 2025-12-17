@@ -2,7 +2,7 @@
 
 A terminal-based open-world text adventure set in the **real world**, powered by Claude Opus 4.5. Explore your actual surroundings, interact with real places and businesses, and experience current events as they happen.
 
-https://github.com/stuhlmueller/rwta/raw/refs/heads/main/text-adventure.mp4
+https://github.com/user-attachments/assets/f29b9d63-627f-4cc2-be09-98e0beb96e17
 
 ## Features
 
