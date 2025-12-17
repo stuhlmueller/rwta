@@ -9,9 +9,9 @@ import textwrap
 import time
 from pathlib import Path
 
-from text_adventure.llm import GameNarrator
-from text_adventure.location import get_city_from_ip, prompt_for_address
-from text_adventure.state import GameState, list_saves, load_game, save_game
+from rwta.llm import GameNarrator
+from rwta.location import get_city_from_ip, prompt_for_address
+from rwta.state import GameState, list_saves, load_game, save_game
 
 # Set up readline history
 HISTORY_FILE = Path(__file__).parent.parent.parent / ".history"

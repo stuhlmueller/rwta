@@ -6,9 +6,9 @@ from collections.abc import Callable
 from anthropic import Anthropic
 from anthropic.types import ContentBlock, Message, ToolUseBlock
 
-from text_adventure.location import get_weather
-from text_adventure.state import GameState
-from text_adventure.tools import ToolResult, execute_tool, get_tools
+from rwta.location import get_weather
+from rwta.state import GameState
+from rwta.tools import ToolResult, execute_tool, get_tools
 
 
 def get_system_prompt(state: GameState) -> str:

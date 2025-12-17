@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from text_adventure.location import Location
+from rwta.location import Location
 
 
 @dataclass

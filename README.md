@@ -40,13 +40,13 @@ export ANTHROPIC_API_KEY='your-api-key'
 
 ```bash
 # Start a new game
-python -m text_adventure.main
+python -m rwta.main
 
 # Or if installed
 text-adventure
 
 # Load a saved game
-python -m text_adventure.main saves/your_save.json
+python -m rwta.main saves/your_save.json
 ```
 
 ## Commands
@@ -79,7 +79,7 @@ text-adventure/
 ├── pyproject.toml           # Project configuration
 ├── README.md
 ├── saves/                   # Save files
-└── src/text_adventure/
+└── src/rwta/
     ├── __init__.py
     ├── main.py              # Entry point and game loop
     ├── llm.py               # Claude API integration
