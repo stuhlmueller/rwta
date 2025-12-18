@@ -8,7 +8,7 @@ from anthropic.types import ContentBlock, Message, ToolUseBlock
 
 from rwta.location import get_weather
 from rwta.state import GameState
-from rwta.tools import ToolResult, execute_tool, get_tools
+from rwta.tools import execute_tool, get_tools
 
 
 def get_system_prompt(state: GameState) -> str:
@@ -88,6 +88,12 @@ Begin!"""
 class GameNarrator:
     """Handles LLM interactions for the text adventure."""
 
+    # Pricing per million tokens (as of 2025)
+    OPUS_INPUT_PRICE = 15.0
+    OPUS_OUTPUT_PRICE = 75.0
+    SONNET_INPUT_PRICE = 3.0
+    SONNET_OUTPUT_PRICE = 15.0
+
     def __init__(self, api_key: str | None = None):
         """
         Initialize the game narrator.
@@ -98,9 +104,15 @@ class GameNarrator:
         self.client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
         self.model = "claude-opus-4-5"
 
+        # Token usage tracking
+        self.opus_input_tokens = 0
+        self.opus_output_tokens = 0
+        self.sonnet_input_tokens = 0
+        self.sonnet_output_tokens = 0
+
     def count_tokens(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, object]],
         system: str,
     ) -> int:
         """Count tokens for a messages request."""
@@ -110,6 +122,55 @@ class GameNarrator:
             messages=messages,  # type: ignore[arg-type]
         )
         return response.input_tokens
+
+    def _summarize_messages(self, messages: list[dict[str, object]]) -> str:
+        """
+        Generate a one-sentence summary of key facts from messages.
+
+        Args:
+            messages: The messages to summarize.
+
+        Returns:
+            A concise summary string.
+        """
+        # Build a text representation of the messages
+        text_parts = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = str(msg.get("content", ""))
+            if role == "user":
+                text_parts.append(f"Player: {content}")
+            else:
+                text_parts.append(f"Narrator: {content}")
+
+        conversation_text = "\n".join(text_parts)
+
+        # Truncate if exceeding ~150k tokens worth (Sonnet handles 200k)
+        max_chars = 500000
+        if len(conversation_text) > max_chars:
+            chunk_size = max_chars // 3
+            beginning = conversation_text[:chunk_size]
+            middle_start = len(conversation_text) // 2 - chunk_size // 2
+            middle = conversation_text[middle_start:middle_start + chunk_size]
+            end = conversation_text[-chunk_size:]
+            conversation_text = f"{beginning}\n\n[...]\n\n{middle}\n\n[...]\n\n{end}"
+
+        prompt = f"""Summarize the key facts from this text adventure conversation in 1-2 sentences.
+Focus on: important items obtained, locations visited, people met, and significant events.
+Be concise and factual.
+
+{conversation_text}
+
+Summary:"""
+
+        response = self.client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        self._track_sonnet_usage(response)
+
+        return self._extract_text_response(response.content)
 
     def generate_response(
         self,
@@ -138,6 +199,7 @@ class GameNarrator:
         messages = state.get_messages_for_api(
             token_counter=lambda msgs: self.count_tokens(msgs, system),
             max_tokens=180000,  # Leave room for response
+            summarizer=self._summarize_messages,
         )
 
         # Initial API call
@@ -148,6 +210,7 @@ class GameNarrator:
             tools=get_tools(),  # type: ignore[arg-type]
             messages=messages,  # type: ignore[arg-type]
         )
+        self._track_opus_usage(response)
 
         # Handle tool use loop
         final_response = self._handle_tool_use(
@@ -163,7 +226,7 @@ class GameNarrator:
     def _handle_tool_use(
         self,
         response: Message,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, object]],
         system: str,
         state: GameState,
         progress_callback: Callable[[], None] | None = None,
@@ -184,6 +247,8 @@ class GameNarrator:
         while response.stop_reason == "tool_use":
             # Find tool use blocks
             tool_uses = [block for block in response.content if isinstance(block, ToolUseBlock)]
+            if not tool_uses:
+                break
 
             # Process each tool use
             tool_results: list[dict[str, object]] = []
@@ -226,6 +291,8 @@ class GameNarrator:
                 tools=get_tools(),  # type: ignore[arg-type]
                 messages=new_messages,  # type: ignore[arg-type]
             )
+            self._track_opus_usage(response)
+            messages = new_messages
 
         # Extract final text response
         return self._extract_text_response(response.content)
@@ -326,5 +393,33 @@ Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The wo
             max_tokens=30,
             messages=[{"role": "user", "content": prompt}],
         )
+        self._track_sonnet_usage(response)
 
         return self._extract_text_response(response.content)
+
+    def _track_opus_usage(self, response: Message) -> None:
+        """Track token usage from an Opus API response."""
+        self.opus_input_tokens += response.usage.input_tokens
+        self.opus_output_tokens += response.usage.output_tokens
+
+    def _track_sonnet_usage(self, response: Message) -> None:
+        """Track token usage from a Sonnet API response."""
+        self.sonnet_input_tokens += response.usage.input_tokens
+        self.sonnet_output_tokens += response.usage.output_tokens
+
+    def get_session_cost(self) -> float:
+        """
+        Calculate the total cost of the session in USD.
+
+        Returns:
+            Total cost in dollars.
+        """
+        opus_cost = (
+            (self.opus_input_tokens / 1_000_000) * self.OPUS_INPUT_PRICE
+            + (self.opus_output_tokens / 1_000_000) * self.OPUS_OUTPUT_PRICE
+        )
+        sonnet_cost = (
+            (self.sonnet_input_tokens / 1_000_000) * self.SONNET_INPUT_PRICE
+            + (self.sonnet_output_tokens / 1_000_000) * self.SONNET_OUTPUT_PRICE
+        )
+        return opus_cost + sonnet_cost

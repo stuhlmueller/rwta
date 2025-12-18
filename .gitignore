@@ -16,6 +16,7 @@ build/
 
 # Claude Code settings
 .claude/
+CLAUDE.md
 
 # Game files
 .history

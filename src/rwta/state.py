@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from rwta.location import Location
 
@@ -58,18 +58,22 @@ class GameState:
 
     def get_messages_for_api(
         self,
-        token_counter: Callable[[list[dict[str, str]]], int] | None = None,
+        token_counter: Callable[[list[dict[str, object]]], int] | None = None,
         max_tokens: int = 180000,
-    ) -> list[dict[str, str]]:
+        summarizer: Callable[[list[dict[str, object]]], str] | None = None,
+    ) -> list[dict[str, object]]:
         """
         Get messages in the format expected by the Anthropic API.
 
         Trims old messages if the conversation exceeds max_tokens.
         Keeps the first 2 messages (game start) and recent messages.
+        If trimming occurs and a summarizer is provided, includes a summary
+        of the trimmed messages.
 
         Args:
             token_counter: Function to count tokens. If None, uses character estimate.
             max_tokens: Max tokens to keep (default 180k for Opus).
+            summarizer: Optional function to summarize trimmed messages.
 
         Returns:
             List of message dicts for the API.
@@ -77,10 +81,10 @@ class GameState:
         all_messages = [{"role": m.role, "content": m.content} for m in self.messages]
 
         # Use provided counter or fall back to estimate (~4 chars per token)
-        def count_tokens(msgs: list[dict[str, str]]) -> int:
+        def count_tokens(msgs: list[dict[str, object]]) -> int:
             if token_counter:
                 return token_counter(msgs)
-            return sum(len(m["content"]) for m in msgs) // 4
+            return sum(len(str(m.get("content", ""))) for m in msgs) // 4
 
         if count_tokens(all_messages) <= max_tokens:
             return all_messages
@@ -91,14 +95,28 @@ class GameState:
 
         first_messages = all_messages[:2]
         remaining = all_messages[2:]
+        trimmed: list[dict[str, object]] = []
 
         # Remove old messages until we're under the limit
-        while remaining and count_tokens(first_messages + remaining) > max_tokens:
+        # Account for space needed by summary message (~200 tokens buffer)
+        target_tokens = max_tokens - 1000 if summarizer else max_tokens
+        while remaining and count_tokens(first_messages + remaining) > target_tokens:
             # Remove oldest pair (user + assistant) from remaining
             if len(remaining) >= 2:
+                trimmed.extend(remaining[:2])
                 remaining = remaining[2:]
             else:
+                trimmed.extend(remaining[:1])
                 remaining = remaining[1:]
+
+        # Generate summary of trimmed messages if summarizer provided
+        if trimmed and summarizer:
+            summary = summarizer(trimmed)
+            summary_msg: dict[str, object] = {
+                "role": "user",
+                "content": f"[Earlier in this adventure: {summary}]",
+            }
+            return first_messages + [summary_msg] + remaining
 
         return first_messages + remaining
 
@@ -146,11 +164,16 @@ class GameState:
         if not isinstance(messages_data, list):
             raise ValueError("Invalid messages data")
 
-        messages = [
-            Message(role=m["role"], content=m["content"])  # type: ignore[arg-type]
-            for m in messages_data
-            if isinstance(m, dict)
-        ]
+        messages: list[Message] = []
+        for item in messages_data:
+            if isinstance(item, dict):
+                msg = cast(dict[str, object], item)
+                role = msg.get("role")
+                content = msg.get("content")
+                if role == "user" and isinstance(content, str):
+                    messages.append(Message(role="user", content=content))
+                elif role == "assistant" and isinstance(content, str):
+                    messages.append(Message(role="assistant", content=content))
 
         # Handle game_time, defaulting to now if not present (for old saves)
         game_time = data.get("game_time")
@@ -197,8 +220,8 @@ def save_game(state: GameState, name: str | None = None) -> Path:
 
     state.updated_at = datetime.now().isoformat()
 
-    with open(filepath, "w") as f:
-        json.dump(state.to_dict(), f, indent=2)
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(state.to_dict(), f, indent=2, ensure_ascii=False)
 
     return filepath
 
@@ -213,7 +236,7 @@ def load_game(filepath: Path) -> GameState:
     Returns:
         The loaded game state.
     """
-    with open(filepath) as f:
+    with open(filepath, encoding="utf-8") as f:
         data = json.load(f)
 
     return GameState.from_dict(data)
@@ -221,7 +244,7 @@ def load_game(filepath: Path) -> GameState:
 
 def list_saves() -> list[tuple[Path, str, str]]:
     """
-    List all available save files.
+    List all available save files, sorted by updated_at (most recent first).
 
     Returns:
         List of tuples: (filepath, name, updated_at)
@@ -229,14 +252,17 @@ def list_saves() -> list[tuple[Path, str, str]]:
     saves_dir = get_saves_dir()
     saves: list[tuple[Path, str, str]] = []
 
-    for filepath in sorted(saves_dir.glob("*.json"), reverse=True):
+    for filepath in saves_dir.glob("*.json"):
         try:
-            with open(filepath) as f:
+            with open(filepath, encoding="utf-8") as f:
                 data = json.load(f)
-            updated_at = data.get("updated_at", "Unknown")
+            updated_at = data.get("updated_at", "")
             saves.append((filepath, filepath.stem, updated_at))
         except (json.JSONDecodeError, OSError):
             # Skip corrupted save files
             continue
+
+    # Sort by updated_at timestamp (most recent first)
+    saves.sort(key=lambda x: x[2], reverse=True)
 
     return saves

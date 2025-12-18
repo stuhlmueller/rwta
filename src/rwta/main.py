@@ -6,6 +6,7 @@ import readline
 import shutil
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from rwta.state import GameState, list_saves, load_game, save_game
 HISTORY_FILE = Path(__file__).parent.parent.parent / ".history"
 
 # Commands for tab completion
-COMMANDS = ["/help", "/save", "/load", "/time", "/quit", "/look"]
+COMMANDS = ["/help", "/save", "/load", "/time", "/tokens", "/quit", "/look"]
 
 # ANSI color codes
 class Colors:
@@ -64,7 +65,10 @@ def setup_readline() -> None:
     """Configure readline for better input handling."""
     # Load history if it exists
     if HISTORY_FILE.exists():
-        readline.read_history_file(str(HISTORY_FILE))
+        try:
+            readline.read_history_file(str(HISTORY_FILE))
+        except OSError:
+            pass
 
     # Set history length
     readline.set_history_length(1000)
@@ -75,7 +79,13 @@ def setup_readline() -> None:
     readline.parse_and_bind("tab: complete")
 
     # Save history on exit
-    atexit.register(lambda: readline.write_history_file(str(HISTORY_FILE)))
+    def _save_history() -> None:
+        try:
+            readline.write_history_file(str(HISTORY_FILE))
+        except OSError:
+            pass
+
+    atexit.register(_save_history)
 
 
 def get_terminal_width() -> int:
@@ -145,30 +155,17 @@ def render_markdown(text: str) -> str:
     return text
 
 
-def typewriter_print(text: str, delay: float = 0.03) -> None:
+def typewriter_print(text: str, delay: float = 0.05) -> None:
     """
     Print text with a typewriter effect, word by word.
-    Pre-scrolls to reserve space so the screen doesn't move while typing.
 
     Args:
         text: The text to print.
         delay: Delay between words in seconds.
     """
-    # Render markdown formatting
-    text = render_markdown(text)
-
-    # Count lines needed (add extra buffer space)
     lines = text.split('\n')
     num_lines = len(lines)
-    buffer_lines = num_lines + 5  # Extra space to prevent scrolling
 
-    # Pre-scroll: print blank lines to reserve space
-    print('\n' * buffer_lines, end='')
-
-    # Move cursor back up
-    print(f'\033[{buffer_lines}A', end='', flush=True)
-
-    # Now type out the text
     for line_idx, line in enumerate(lines):
         words = line.split()
         for i, word in enumerate(words):
@@ -181,36 +178,48 @@ def typewriter_print(text: str, delay: float = 0.03) -> None:
         if line_idx < num_lines - 1:
             print()
 
-    print()  # Final newline
-
 
 def print_narrative(text: str) -> None:
     """
     Print narrative text with wrapping and typewriter effect.
+    Pre-scrolls to reserve space so the screen doesn't move while typing.
 
     Args:
         text: The narrative text to print.
     """
     wrapped = wrap_text(text)
-    paragraphs = wrapped.split("\n\n")
+    wrapped = render_markdown(wrapped)
 
+    # Count exact lines needed (including blank lines between paragraphs)
+    total_lines = wrapped.count('\n') + 2  # +1 for last line, +1 for final newline
+
+    # Pre-scroll: print blank lines to reserve space
+    print('\n' * total_lines, end='')
+
+    # Move cursor back up
+    print(f'\033[{total_lines}A', end='', flush=True)
+
+    # Type out each paragraph
+    paragraphs = wrapped.split("\n\n")
     for i, para in enumerate(paragraphs):
         typewriter_print(para)
+        print()  # End the paragraph
         if i < len(paragraphs) - 1:
-            print()  # Extra line between paragraphs
-            time.sleep(0.1)  # Slight pause between paragraphs
+            print()  # Blank line between paragraphs
+            time.sleep(0.15)
 
 
 def print_help() -> None:
     """Print available commands."""
     c = Colors
     print(f"\n{c.SYSTEM}Commands:{c.RESET}")
-    print(f"  {c.WHITE}/help{c.RESET}  - Show this help message")
-    print(f"  {c.WHITE}/save{c.RESET}  - Save your game (optionally: /save <name>)")
-    print(f"  {c.WHITE}/load{c.RESET}  - Load a saved game")
-    print(f"  {c.WHITE}/time{c.RESET}  - Show current in-game time")
-    print(f"  {c.WHITE}/look{c.RESET}  - Look around (re-describe surroundings)")
-    print(f"  {c.WHITE}/quit{c.RESET}  - Exit the game")
+    print(f"  {c.WHITE}/help{c.RESET}    - Show this help message")
+    print(f"  {c.WHITE}/save{c.RESET}    - Save your game (optionally: /save <name>)")
+    print(f"  {c.WHITE}/load{c.RESET}    - Load a saved game")
+    print(f"  {c.WHITE}/time{c.RESET}    - Show current in-game time")
+    print(f"  {c.WHITE}/tokens{c.RESET}  - Show token usage and context limit")
+    print(f"  {c.WHITE}/look{c.RESET}    - Look around (re-describe surroundings)")
+    print(f"  {c.WHITE}/quit{c.RESET}    - Exit the game")
 
 
 def handle_save(state: GameState, args: str, silent: bool = False) -> None:
@@ -244,9 +253,14 @@ def handle_load() -> GameState | None:
         idx = int(choice) - 1
         if 0 <= idx < len(saves):
             filepath, name, _ = saves[idx]
-            state = load_game(filepath)
-            print(f"Loaded: {name}")
-            return state
+            try:
+                state = load_game(filepath)
+            except (OSError, ValueError, KeyError) as e:
+                print(f"Error loading save: {e}")
+                return None
+            else:
+                print(f"Loaded: {name}")
+                return state
         else:
             print("Invalid selection.")
             return None
@@ -258,6 +272,92 @@ def handle_load() -> GameState | None:
 def handle_time(state: GameState) -> None:
     """Handle the /time command."""
     print(f"{Colors.TIME}Current in-game time: {state.get_formatted_game_time()}{Colors.RESET}")
+
+
+def handle_tokens(narrator: "GameNarrator", state: GameState) -> None:
+    """Handle the /tokens command."""
+    max_tokens = 180000
+    # Estimate current tokens using the narrator's token counter
+    messages = [{"role": m.role, "content": m.content} for m in state.messages]
+    system = ""  # Approximate - actual system prompt varies
+    try:
+        current_tokens = narrator.count_tokens(messages, system)
+    except Exception:
+        # Fallback to character estimate
+        current_tokens = sum(len(m.content) for m in state.messages) // 4
+
+    percentage = (current_tokens / max_tokens) * 100
+    remaining = max_tokens - current_tokens
+
+    print(f"\n{Colors.SYSTEM}Token Usage:{Colors.RESET}")
+    print(f"  Current: {current_tokens:,} / {max_tokens:,} ({percentage:.1f}%)")
+    print(f"  Remaining: {remaining:,}")
+    if percentage > 80:
+        print(f"  {Colors.TIME}Warning: Approaching limit, older messages will be summarized soon{Colors.RESET}")
+
+
+def print_session_cost(narrator: "GameNarrator") -> None:
+    """Print the session cost on exit."""
+    cost = narrator.get_session_cost()
+    print(f"{Colors.DIM}Session cost: ${cost:.4f}{Colors.RESET}")
+
+
+def generate_with_loading(
+    narrator: "GameNarrator",
+    prompt: str,
+    state: GameState,
+    action_hint: str | None = None,
+    refresh_interval: float = 10.0,
+) -> str:
+    """
+    Generate a response while showing periodic loading messages.
+
+    Runs the API call in a background thread and refreshes the loading
+    message every refresh_interval seconds until the response is ready.
+
+    Args:
+        narrator: The GameNarrator instance.
+        prompt: The prompt to send to the model.
+        state: Current game state.
+        action_hint: Optional hint for loading message context.
+        refresh_interval: Seconds between loading message refreshes.
+
+    Returns:
+        The generated response text.
+    """
+    result: str | None = None
+    error: BaseException | None = None
+
+    def run_generation() -> None:
+        nonlocal result, error
+        try:
+            result = narrator.generate_response(prompt, state)
+        except BaseException as e:
+            error = e
+
+    # Start generation in background thread
+    thread = threading.Thread(target=run_generation, daemon=True)
+    thread.start()
+
+    # Show initial loading message
+    loading_msg = narrator.generate_loading_message(state, action_hint)
+    print(f"\n{Colors.LOADING}{loading_msg}{Colors.RESET}", end="", flush=True)
+
+    # Periodically refresh loading message while waiting
+    while thread.is_alive():
+        thread.join(timeout=refresh_interval)
+        if thread.is_alive():
+            # Clear current line and show new loading message
+            loading_msg = narrator.generate_loading_message(state, action_hint)
+            print(f"\r{Colors.LOADING}{loading_msg:<60}{Colors.RESET}", end="", flush=True)
+
+    print()  # Newline after loading messages
+
+    if error is not None:
+        raise error
+
+    assert result is not None
+    return result
 
 
 def main() -> None:
@@ -346,6 +446,9 @@ def main() -> None:
 
     print("\nType /help for commands, or just start exploring!")
 
+    # Track last Ctrl-C time for double-press detection
+    last_interrupt_time: float = 0.0
+
     # Main game loop
     while True:
         try:
@@ -364,7 +467,8 @@ def main() -> None:
 
                 if command == "/quit":
                     handle_save(state, "", silent=True)
-                    print(f"\n{Colors.SYSTEM}Goodbye!{Colors.RESET}")
+                    print_session_cost(narrator)
+                    print(f"{Colors.SYSTEM}Goodbye!{Colors.RESET}")
                     break
 
                 elif command == "/help":
@@ -389,15 +493,17 @@ def main() -> None:
                 elif command == "/time":
                     handle_time(state)
 
+                elif command == "/tokens":
+                    handle_tokens(narrator, state)
+
                 elif command == "/look":
                     # Re-describe surroundings without advancing time
-                    loading_msg = narrator.generate_loading_message(state, "look around")
-                    print(f"\n{Colors.LOADING}{loading_msg}{Colors.RESET}")
-                    response = narrator.generate_response(
+                    response = generate_with_loading(
+                        narrator,
                         "Look around and describe my current surroundings in detail. Do not advance time.",
-                        state
+                        state,
+                        action_hint="look around",
                     )
-                    print()
                     print_narrative(response)
                     save_game(state)
 
@@ -408,21 +514,29 @@ def main() -> None:
                 continue
 
             # Generate response for regular input
-            # Show quick loading message
-            loading_msg = narrator.generate_loading_message(state, user_input)
-            print(f"\n{Colors.LOADING}{loading_msg}{Colors.RESET}")
-
-            response = narrator.generate_response(user_input, state)
-            print()
+            response = generate_with_loading(narrator, user_input, state, action_hint=user_input)
             print_narrative(response)
 
             # Autosave silently
             save_game(state)
 
         except KeyboardInterrupt:
-            print("\n\nInterrupted. Type /quit to exit.")
+            current_time = time.time()
+            if current_time - last_interrupt_time < 2.0:
+                # Double Ctrl-C: save and quit
+                handle_save(state, "", silent=True)
+                print_session_cost(narrator)
+                print(f"{Colors.SYSTEM}Goodbye!{Colors.RESET}")
+                break
+            else:
+                # First Ctrl-C: show warning
+                last_interrupt_time = current_time
+                print(f"\n\n{Colors.SYSTEM}Press Ctrl-C again to save and quit.{Colors.RESET}")
         except EOFError:
-            print("\n\nGoodbye!")
+            handle_save(state, "", silent=True)
+            print()
+            print_session_cost(narrator)
+            print(f"{Colors.SYSTEM}Goodbye!{Colors.RESET}")
             break
 
 
