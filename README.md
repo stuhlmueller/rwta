@@ -57,7 +57,11 @@ python -m rwta.main saves/your_save.json
 | `/save [name]` | Save your game |
 | `/load` | Load a saved game |
 | `/time` | Show current in-game time |
+| `/tokens` | Show token usage and context limit |
+| `/look` | Re-describe your current surroundings |
 | `/quit` | Exit the game |
+
+You can also press `Ctrl-C` twice to save and quit.
 
 ## How It Works
 
@@ -71,22 +75,6 @@ python -m rwta.main saves/your_save.json
 3. **Web Search**: Claude can search the web to get accurate information about real places, current events, business hours, etc.
 
 4. **Granular Actions**: You must take realistic step-by-step actions. To fly somewhere, you need to get to the airport, buy a ticket, board the plane, etc.
-
-## Project Structure
-
-```
-text-adventure/
-├── pyproject.toml           # Project configuration
-├── README.md
-├── saves/                   # Save files
-└── src/rwta/
-    ├── __init__.py
-    ├── main.py              # Entry point and game loop
-    ├── llm.py               # Claude API integration
-    ├── tools.py             # Web search and time tools
-    ├── state.py             # Game state and save/load
-    └── location.py          # IP geolocation
-```
 
 ## License
 
