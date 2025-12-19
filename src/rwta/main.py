@@ -316,10 +316,19 @@ def handle_tokens(narrator: "GameNarrator", state: GameState) -> None:
         print(f"  {Colors.TIME}Warning: Approaching limit, older messages will be summarized soon{Colors.RESET}")
 
 
-def print_session_cost(narrator: "GameNarrator") -> None:
-    """Print the session cost on exit."""
+def count_conversation_words(state: GameState) -> int:
+    """Count total words in the conversation history."""
+    total = 0
+    for msg in state.messages:
+        total += len(msg.content.split())
+    return total
+
+
+def print_session_stats(narrator: "GameNarrator", state: GameState) -> None:
+    """Print session statistics on exit."""
     cost = narrator.get_session_cost()
-    print(f"{Colors.DIM}Session cost: ${cost:.4f}{Colors.RESET}")
+    words = count_conversation_words(state)
+    print(f"{Colors.DIM}Session: {words:,} words, ${cost:.4f}{Colors.RESET}")
 
 
 def generate_with_loading(
@@ -490,7 +499,7 @@ def main() -> None:
 
                 if command == "/quit":
                     handle_save(state, "", silent=True)
-                    print_session_cost(narrator)
+                    print_session_stats(narrator, state)
                     print(f"{Colors.SYSTEM}Goodbye!{Colors.RESET}")
                     break
 
@@ -553,7 +562,7 @@ def main() -> None:
             if current_time - last_interrupt_time < 2.0:
                 # Double Ctrl-C: save and quit
                 handle_save(state, "", silent=True)
-                print_session_cost(narrator)
+                print_session_stats(narrator, state)
                 print(f"{Colors.SYSTEM}Goodbye!{Colors.RESET}")
                 break
             else:
@@ -563,7 +572,7 @@ def main() -> None:
         except EOFError:
             handle_save(state, "", silent=True)
             print()
-            print_session_cost(narrator)
+            print_session_stats(narrator, state)
             print(f"{Colors.SYSTEM}Goodbye!{Colors.RESET}")
             break
 
