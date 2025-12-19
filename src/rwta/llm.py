@@ -1,14 +1,48 @@
 """Claude API integration for generating game responses."""
 
 import os
+import time
 from collections.abc import Callable
 
 from anthropic import Anthropic
-from anthropic.types import ContentBlock, Message, ToolUseBlock
+from anthropic.types import ContentBlock, Message, TextBlock, ToolUseBlock
 
-from rwta.location import get_weather
+from rwta.location import Location, Weather, get_weather
 from rwta.state import GameState
 from rwta.tools import execute_tool, get_tools
+
+
+# Weather cache: stores (location_key, timestamp, weather) tuples
+_weather_cache: dict[str, tuple[float, Weather | None]] = {}
+WEATHER_CACHE_TTL_SECONDS = 300  # 5 minutes
+
+
+def _get_location_cache_key(location: Location) -> str:
+    """Generate a cache key for a location based on coordinates or city."""
+    if location.latitude is not None and location.longitude is not None:
+        # Round to 2 decimal places (~1km precision)
+        return f"{location.latitude:.2f},{location.longitude:.2f}"
+    return f"{location.city},{location.country}".lower()
+
+
+def get_cached_weather(location: Location) -> Weather | None:
+    """Get weather for a location, using cache if available and fresh."""
+    cache_key = _get_location_cache_key(location)
+    now = time.time()
+
+    # Check cache
+    if cache_key in _weather_cache:
+        cached_time, cached_weather = _weather_cache[cache_key]
+        if now - cached_time < WEATHER_CACHE_TTL_SECONDS:
+            return cached_weather
+
+    # Fetch fresh weather
+    weather = get_weather(location)
+
+    # Store in cache
+    _weather_cache[cache_key] = (now, weather)
+
+    return weather
 
 
 def get_system_prompt(state: GameState) -> str:
@@ -21,11 +55,11 @@ def get_system_prompt(state: GameState) -> str:
     Returns:
         System prompt string.
     """
-    location = state.starting_location
+    location = state.get_current_location()
     game_time = state.get_formatted_game_time()
 
-    # Fetch current weather
-    weather = get_weather(location)
+    # Fetch current weather (with caching)
+    weather = get_cached_weather(location)
     weather_str = str(weather) if weather else "Weather unknown"
 
     return f"""You are the narrator of a text adventure game set in the REAL WORLD. The player exists in the actual, present-day world and can explore real locations, interact with real businesses, and encounter real-world events.
@@ -40,9 +74,20 @@ You are an immersive narrator who describes the world around the player. You sho
 1. Describe real locations, streets, landmarks, and businesses accurately
 2. Use the search_web tool SPARINGLY - only 1-2 searches when truly needed for specific facts you don't know
 3. Use the advance_time tool whenever the player performs actions that take time (walking, eating, waiting, etc.)
-4. React to the current time of day (morning, afternoon, evening, night) with appropriate descriptions
-5. Keep track of where the player is and what they're doing
-6. Make the world feel alive with realistic details, weather, people, traffic, etc.
+4. Use the update_location tool when the player moves to a significantly different place (new neighborhood, city, or country)
+5. React to the current time of day (morning, afternoon, evening, night) with appropriate descriptions
+6. Keep track of where the player is and what they're doing
+7. Make the world feel alive with realistic details, weather, people, traffic, etc.
+
+## Location Tracking
+Use the update_location tool when the player:
+- Arrives at a new neighborhood or district within a city
+- Travels to a different city (by car, bus, train, plane, etc.)
+- Crosses into a different country
+- Arrives at a significant landmark that defines their location
+
+Do NOT call update_location for minor movements (walking down the street, entering a building in the same area).
+When calling update_location, provide the most specific address/landmark you can for the "address" field.
 
 ## Search Tool Guidelines
 - Do NOT search for every detail. Use your knowledge of the world for general descriptions.
@@ -267,6 +312,18 @@ Summary:"""
                 if result.advance_time_minutes is not None:
                     state.advance_time_minutes(result.advance_time_minutes)
 
+                # Handle location update
+                if result.location_update is not None:
+                    new_location = Location(
+                        city=result.location_update.city,
+                        region=result.location_update.region,
+                        country=result.location_update.country,
+                        address=result.location_update.address,
+                        latitude=result.location_update.latitude,
+                        longitude=result.location_update.longitude,
+                    )
+                    state.set_current_location(new_location)
+
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -310,7 +367,7 @@ Summary:"""
                         "input": block.input,
                     }
                 )
-            elif hasattr(block, "text"):
+            elif isinstance(block, TextBlock):
                 result.append({"type": "text", "text": block.text})
         return result
 
@@ -318,8 +375,8 @@ Summary:"""
         """Extract text from response content blocks."""
         text_parts: list[str] = []
         for block in content:
-            if hasattr(block, "text"):
-                text_parts.append(str(block.text))
+            if isinstance(block, TextBlock):
+                text_parts.append(block.text)
         return "\n".join(text_parts)
 
     def start_game(

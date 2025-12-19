@@ -19,6 +19,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/rwta"]
 
-[tool.ty.environment]
-python-version = "3.11"
-python = ".venv"
+[tool.pyright]
+pythonVersion = "3.11"
+include = ["src"]
+typeCheckingMode = "standard"

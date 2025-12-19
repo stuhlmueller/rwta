@@ -23,12 +23,22 @@ class GameState:
     """Complete game state."""
 
     starting_location: Location
+    current_location: Location | None = None  # None means same as starting_location
     messages: list[Message] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     # In-game time (starts at current real time)
     game_time: str = field(default_factory=lambda: datetime.now().isoformat())
-    version: int = 1
+    version: int = 2  # Bumped for current_location migration
+
+    def get_current_location(self) -> Location:
+        """Get the player's current location (falls back to starting if not set)."""
+        return self.current_location if self.current_location else self.starting_location
+
+    def set_current_location(self, location: Location) -> None:
+        """Update the player's current location."""
+        self.current_location = location
+        self.updated_at = datetime.now().isoformat()
 
     def get_game_datetime(self) -> datetime:
         """Get the current in-game datetime."""
@@ -78,7 +88,9 @@ class GameState:
         Returns:
             List of message dicts for the API.
         """
-        all_messages = [{"role": m.role, "content": m.content} for m in self.messages]
+        all_messages: list[dict[str, object]] = [
+            {"role": m.role, "content": m.content} for m in self.messages
+        ]
 
         # Use provided counter or fall back to estimate (~4 chars per token)
         def count_tokens(msgs: list[dict[str, object]]) -> int:
@@ -122,7 +134,7 @@ class GameState:
 
     def to_dict(self) -> dict[str, object]:
         """Convert state to a dictionary for JSON serialization."""
-        return {
+        result: dict[str, object] = {
             "version": self.version,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -130,6 +142,40 @@ class GameState:
             "starting_location": asdict(self.starting_location),
             "messages": [asdict(m) for m in self.messages],
         }
+        if self.current_location is not None:
+            result["current_location"] = asdict(self.current_location)
+        return result
+
+    @classmethod
+    def _parse_location(cls, loc_data: dict[str, object]) -> Location:
+        """Parse a location dictionary into a Location object."""
+        address_val = loc_data.get("address")
+        address = str(address_val) if address_val is not None else None
+
+        latitude: float | None = None
+        lat_val = loc_data.get("latitude")
+        if lat_val is not None:
+            try:
+                latitude = float(str(lat_val))
+            except ValueError:
+                pass
+
+        longitude: float | None = None
+        lon_val = loc_data.get("longitude")
+        if lon_val is not None:
+            try:
+                longitude = float(str(lon_val))
+            except ValueError:
+                pass
+
+        return Location(
+            city=str(loc_data.get("city") or ""),
+            region=str(loc_data.get("region") or ""),
+            country=str(loc_data.get("country") or ""),
+            address=address,
+            latitude=latitude,
+            longitude=longitude,
+        )
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "GameState":
@@ -138,27 +184,16 @@ class GameState:
         if not isinstance(location_data, dict):
             raise ValueError("Invalid location data")
 
-        # Cast to the expected type
-        loc = dict(location_data)
+        # Cast to proper type for _parse_location
+        starting_loc_dict: dict[str, object] = {str(k): v for k, v in location_data.items()}
+        starting_location = cls._parse_location(starting_loc_dict)
 
-        # Extract address and coordinates, handling None
-        address_val = loc.get("address")
-        address = str(address_val) if address_val is not None else None
-
-        lat_val = loc.get("latitude")
-        latitude = float(lat_val) if lat_val is not None else None
-
-        lon_val = loc.get("longitude")
-        longitude = float(lon_val) if lon_val is not None else None
-
-        location = Location(
-            city=str(loc.get("city") or ""),
-            region=str(loc.get("region") or ""),
-            country=str(loc.get("country") or ""),
-            address=address,
-            latitude=latitude,
-            longitude=longitude,
-        )
+        # Parse current_location if present (migration: old saves won't have it)
+        current_location: Location | None = None
+        current_loc_data = data.get("current_location")
+        if current_loc_data is not None and isinstance(current_loc_data, dict):
+            current_loc_dict: dict[str, object] = {str(k): v for k, v in current_loc_data.items()}
+            current_location = cls._parse_location(current_loc_dict)
 
         messages_data = data.get("messages", [])
         if not isinstance(messages_data, list):
@@ -181,12 +216,13 @@ class GameState:
             game_time = datetime.now().isoformat()
 
         return cls(
-            starting_location=location,
+            starting_location=starting_location,
+            current_location=current_location,
             messages=messages,
             created_at=str(data.get("created_at", "")),
             updated_at=str(data.get("updated_at", "")),
             game_time=str(game_time),
-            version=int(data.get("version", 1)),  # type: ignore[arg-type]
+            version=2,  # Upgrade to current version
         )
 
 

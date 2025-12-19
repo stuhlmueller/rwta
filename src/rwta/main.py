@@ -18,7 +18,7 @@ from rwta.state import GameState, list_saves, load_game, save_game
 HISTORY_FILE = Path(__file__).parent.parent.parent / ".history"
 
 # Commands for tab completion
-COMMANDS = ["/help", "/save", "/load", "/time", "/tokens", "/quit", "/look"]
+COMMANDS = ["/help", "/save", "/load", "/time", "/tokens", "/quit", "/look", "/where"]
 
 # ANSI color codes
 class Colors:
@@ -217,6 +217,7 @@ def print_help() -> None:
     print(f"  {c.WHITE}/save{c.RESET}    - Save your game (optionally: /save <name>)")
     print(f"  {c.WHITE}/load{c.RESET}    - Load a saved game")
     print(f"  {c.WHITE}/time{c.RESET}    - Show current in-game time")
+    print(f"  {c.WHITE}/where{c.RESET}   - Show current location and time")
     print(f"  {c.WHITE}/tokens{c.RESET}  - Show token usage and context limit")
     print(f"  {c.WHITE}/look{c.RESET}    - Look around (re-describe surroundings)")
     print(f"  {c.WHITE}/quit{c.RESET}    - Exit the game")
@@ -274,15 +275,34 @@ def handle_time(state: GameState) -> None:
     print(f"{Colors.TIME}Current in-game time: {state.get_formatted_game_time()}{Colors.RESET}")
 
 
+def handle_where(state: GameState) -> None:
+    """Handle the /where command."""
+    location = state.get_current_location()
+    print(f"{Colors.SYSTEM}Current location: {location}{Colors.RESET}")
+    print(f"{Colors.TIME}Time: {state.get_formatted_game_time()}{Colors.RESET}")
+
+
+def print_status_line(state: GameState) -> None:
+    """Print a brief status line showing location and time."""
+    location = state.get_current_location()
+    # Use short location format and condensed time
+    game_dt = state.get_game_datetime()
+    time_str = game_dt.strftime("%a %I:%M %p")  # e.g., "Mon 09:15 PM"
+    location_str = location.short_str() if hasattr(location, 'short_str') else str(location)
+    print(f"\n{Colors.DIM}{location_str} — {time_str}{Colors.RESET}")
+
+
 def handle_tokens(narrator: "GameNarrator", state: GameState) -> None:
     """Handle the /tokens command."""
     max_tokens = 180000
     # Estimate current tokens using the narrator's token counter
-    messages = [{"role": m.role, "content": m.content} for m in state.messages]
+    messages: list[dict[str, object]] = [
+        {"role": m.role, "content": m.content} for m in state.messages
+    ]
     system = ""  # Approximate - actual system prompt varies
     try:
         current_tokens = narrator.count_tokens(messages, system)
-    except Exception:
+    except (ValueError, TypeError, RuntimeError):
         # Fallback to character estimate
         current_tokens = sum(len(m.content) for m in state.messages) // 4
 
@@ -354,9 +374,11 @@ def generate_with_loading(
     print()  # Newline after loading messages
 
     if error is not None:
-        raise error
+        # Re-raise the exception from the background thread
+        raise error from None
 
-    assert result is not None
+    if result is None:
+        raise RuntimeError("Generation completed but returned no result")
     return result
 
 
@@ -423,6 +445,7 @@ def main() -> None:
             opening = narrator.start_game(state, progress_callback=lambda: print(".", end="", flush=True))
             print("\n")  # newline after dots
             print_narrative(opening)
+            print_status_line(state)
             # Autosave after opening
             save_game(state)
         except KeyboardInterrupt:
@@ -430,7 +453,7 @@ def main() -> None:
             sys.exit(0)
     else:
         # Resuming from save - show current state
-        print(f"\nLocation: {state.starting_location}")
+        print(f"\nLocation: {state.get_current_location()}")
         print(f"Time: {state.get_formatted_game_time()}")
 
         # Show last exchange if any
@@ -481,17 +504,20 @@ def main() -> None:
                     new_state = handle_load()
                     if new_state is not None:
                         state = new_state
-                        print(f"\n{Colors.TIME}Time: {state.get_formatted_game_time()}{Colors.RESET}")
                         # Show last response
                         if state.messages:
                             for msg in reversed(state.messages):
                                 if msg.role == "assistant":
                                     print()
                                     print_narrative(msg.content)
+                                    print_status_line(state)
                                     break
 
                 elif command == "/time":
                     handle_time(state)
+
+                elif command == "/where":
+                    handle_where(state)
 
                 elif command == "/tokens":
                     handle_tokens(narrator, state)
@@ -505,6 +531,7 @@ def main() -> None:
                         action_hint="look around",
                     )
                     print_narrative(response)
+                    print_status_line(state)
                     save_game(state)
 
                 else:
@@ -516,6 +543,7 @@ def main() -> None:
             # Generate response for regular input
             response = generate_with_loading(narrator, user_input, state, action_hint=user_input)
             print_narrative(response)
+            print_status_line(state)
 
             # Autosave silently
             save_game(state)

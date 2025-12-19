@@ -57,6 +57,52 @@ class TestGameState(unittest.TestCase):
         self.assertEqual(trimmed[0]["content"], "intro 1")
         self.assertEqual(trimmed[1]["content"], "intro 2")
 
+    def test_current_location_defaults_to_starting(self) -> None:
+        """When current_location is None, get_current_location returns starting_location."""
+        state = GameState(
+            starting_location=Location(city="SF", region="CA", country="US"),
+        )
+        self.assertIsNone(state.current_location)
+        self.assertEqual(state.get_current_location().city, "SF")
+
+    def test_current_location_can_be_set(self) -> None:
+        """set_current_location updates the current location."""
+        state = GameState(
+            starting_location=Location(city="SF", region="CA", country="US"),
+        )
+        new_loc = Location(city="NYC", region="NY", country="US")
+        state.set_current_location(new_loc)
+        self.assertEqual(state.get_current_location().city, "NYC")
+
+    def test_current_location_serialization(self) -> None:
+        """current_location is properly serialized and deserialized."""
+        state = GameState(
+            starting_location=Location(city="SF", region="CA", country="US"),
+        )
+        state.set_current_location(Location(city="LA", region="CA", country="US", latitude=34.0, longitude=-118.0))
+
+        data = state.to_dict()
+        self.assertIn("current_location", data)
+
+        loaded = GameState.from_dict(data)
+        self.assertEqual(loaded.get_current_location().city, "LA")
+        self.assertEqual(loaded.get_current_location().latitude, 34.0)
+
+    def test_migration_from_old_saves(self) -> None:
+        """Old saves without current_location should load correctly."""
+        data = {
+            "version": 1,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "game_time": datetime.now().isoformat(),
+            "starting_location": {"city": "X", "region": "Y", "country": "Z"},
+            "messages": [],
+            # No current_location field
+        }
+        loaded = GameState.from_dict(data)
+        self.assertIsNone(loaded.current_location)
+        self.assertEqual(loaded.get_current_location().city, "X")
+
 
 if __name__ == "__main__":
     unittest.main()

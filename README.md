@@ -9,6 +9,7 @@ https://github.com/user-attachments/assets/f29b9d63-627f-4cc2-be09-98e0beb96e17
 - **Real-world setting**: Start from your current location (via IP geolocation) or enter a specific address
 - **Live data**: The game uses web search to fetch current information about places, news, weather, and more
 - **Dynamic time**: In-game time passes realistically based on your actions (walking, eating, traveling)
+- **Location tracking**: Your current location updates as you move through the world, with weather that changes based on where you are
 - **Save/load**: Save your progress and continue later
 - **Action granularity**: Experience the world step-by-step - no teleporting or skipping ahead
 
@@ -57,6 +58,7 @@ python -m rwta.main saves/your_save.json
 | `/save [name]` | Save your game |
 | `/load` | Load a saved game |
 | `/time` | Show current in-game time |
+| `/where` | Show current location and time |
 | `/tokens` | Show token usage and context limit |
 | `/look` | Re-describe your current surroundings |
 | `/quit` | Exit the game |
@@ -67,14 +69,16 @@ You can also press `Ctrl-C` twice to save and quit.
 
 1. **Location Detection**: On startup, the game detects your city via IP geolocation, then asks for a specific address (or picks a notable location)
 
-2. **Time Tracking**: The game starts at the current real-world time. Time advances based on your actions:
+2. **Location Tracking**: As you move through the world, your current location updates automatically. The game tracks both your starting location and where you currently are. Weather updates based on your current position (cached for 5 minutes to avoid excessive API calls).
+
+3. **Time Tracking**: The game starts at the current real-world time. Time advances based on your actions:
    - Walking: ~15-20 min/mile
    - Eating: 30-60 min
    - Shopping: 15-30 min/store
 
-3. **Web Search**: Claude can search the web to get accurate information about real places, current events, business hours, etc.
+4. **Web Search**: Claude can search the web to get accurate information about real places, current events, business hours, etc.
 
-4. **Granular Actions**: You must take realistic step-by-step actions. To fly somewhere, you need to get to the airport, buy a ticket, board the plane, etc.
+5. **Granular Actions**: You must take realistic step-by-step actions. To fly somewhere, you need to get to the airport, buy a ticket, board the plane, etc.
 
 ## License
 

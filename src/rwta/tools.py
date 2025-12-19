@@ -62,10 +62,50 @@ ADVANCE_TIME_TOOL: ToolDefinition = {
     },
 }
 
+UPDATE_LOCATION_TOOL: ToolDefinition = {
+    "name": "update_location",
+    "description": (
+        "Update the player's current location when they move to a significantly different "
+        "place (different neighborhood, city, or country). Use this when the player walks "
+        "to a new area, takes transportation to a different part of town, or travels to "
+        "another city. Don't call this for minor movements within the same immediate area."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "city": {
+                "type": "string",
+                "description": "The city name (e.g., 'San Francisco', 'Tokyo')",
+            },
+            "region": {
+                "type": "string",
+                "description": "The state/province/region (e.g., 'California', 'Tokyo')",
+            },
+            "country": {
+                "type": "string",
+                "description": "The country code or name (e.g., 'US', 'Japan')",
+            },
+            "address": {
+                "type": "string",
+                "description": "Specific address or landmark (e.g., '123 Main St', 'Golden Gate Park')",
+            },
+            "latitude": {
+                "type": "number",
+                "description": "Latitude coordinate (optional, for weather accuracy)",
+            },
+            "longitude": {
+                "type": "number",
+                "description": "Longitude coordinate (optional, for weather accuracy)",
+            },
+        },
+        "required": ["city", "region", "country"],
+    },
+}
+
 
 def get_tools() -> list[ToolDefinition]:
     """Return the list of available tools."""
-    return [SEARCH_WEB_TOOL, ADVANCE_TIME_TOOL]
+    return [SEARCH_WEB_TOOL, ADVANCE_TIME_TOOL, UPDATE_LOCATION_TOOL]
 
 
 def search_web(query: str, max_results: int = 5, timeout: float = 10.0) -> str:
@@ -199,6 +239,26 @@ def _parse_duckduckgo_html(html: str, max_results: int) -> list[dict[str, str]]:
     return results
 
 
+class LocationUpdate:
+    """Data for a location update."""
+
+    def __init__(
+        self,
+        city: str,
+        region: str,
+        country: str,
+        address: str | None = None,
+        latitude: float | None = None,
+        longitude: float | None = None,
+    ):
+        self.city = city
+        self.region = region
+        self.country = country
+        self.address = address
+        self.latitude = latitude
+        self.longitude = longitude
+
+
 class ToolResult:
     """Result of a tool execution."""
 
@@ -207,10 +267,12 @@ class ToolResult:
         message: str,
         advance_time_minutes: int | None = None,
         advance_time_reason: str | None = None,
+        location_update: LocationUpdate | None = None,
     ):
         self.message = message
         self.advance_time_minutes = advance_time_minutes
         self.advance_time_reason = advance_time_reason
+        self.location_update = location_update
 
 
 def execute_tool(tool_name: str, tool_input: dict[str, object]) -> ToolResult:
@@ -244,6 +306,50 @@ def execute_tool(tool_name: str, tool_input: dict[str, object]) -> ToolResult:
             f"Time advanced by {minutes} minutes ({reason})",
             advance_time_minutes=minutes,
             advance_time_reason=str(reason),
+        )
+
+    if tool_name == "update_location":
+        city = str(tool_input.get("city", "")).strip()
+        region = str(tool_input.get("region", "")).strip()
+        country = str(tool_input.get("country", "")).strip()
+
+        if not city or not region or not country:
+            return ToolResult("Error: city, region, and country are required")
+
+        address_val = tool_input.get("address")
+        address = str(address_val).strip() if address_val else None
+
+        lat_val = tool_input.get("latitude")
+        lon_val = tool_input.get("longitude")
+
+        latitude: float | None = None
+        longitude: float | None = None
+
+        if lat_val is not None:
+            try:
+                latitude = float(lat_val)  # type: ignore[arg-type]
+            except (ValueError, TypeError):
+                pass
+
+        if lon_val is not None:
+            try:
+                longitude = float(lon_val)  # type: ignore[arg-type]
+            except (ValueError, TypeError):
+                pass
+
+        location_update = LocationUpdate(
+            city=city,
+            region=region,
+            country=country,
+            address=address,
+            latitude=latitude,
+            longitude=longitude,
+        )
+
+        location_str = f"{address}, {city}" if address else city
+        return ToolResult(
+            f"Location updated to: {location_str}, {region}, {country}",
+            location_update=location_update,
         )
 
     return ToolResult(f"Unknown tool: {tool_name}")
