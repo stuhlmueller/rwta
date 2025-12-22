@@ -8,9 +8,8 @@ from anthropic import Anthropic
 from anthropic.types import ContentBlock, Message, TextBlock, ToolUseBlock
 
 from rwta.location import Location, Weather, get_weather
-from rwta.state import GameState
+from rwta.state import GameState, Thread
 from rwta.tools import execute_tool, get_tools
-
 
 # Weather cache: stores (location_key, timestamp, weather) tuples
 _weather_cache: dict[str, tuple[float, Weather | None]] = {}
@@ -45,22 +44,69 @@ def get_cached_weather(location: Location) -> Weather | None:
     return weather
 
 
-def get_system_prompt(state: GameState) -> str:
+def _format_threads_for_prompt(threads: list[Thread], game_time_minutes: int) -> str:
+    """Format thread list for system prompt (brief overview)."""
+    if not threads:
+        return ""
+
+    thread_summaries = []
+    for t in threads:
+        location_str = ""
+        if t.location:
+            location_str = f" at {t.location.city or t.location.address or 'unknown location'}"
+        staleness = game_time_minutes - t.last_advanced_at
+        status_note = f" [{t.status}]" if t.status != "active" else ""
+        thread_summaries.append(
+            f"- ID: {t.id[:8]}... | {t.name}{location_str} ({staleness} min since update){status_note}"
+        )
+
+    return "\n".join(thread_summaries)
+
+
+def get_system_prompt(state: GameState, pending_thread_events: str | None = None) -> str:
     """
     Generate the system prompt for the game.
 
     Args:
         state: Current game state.
+        pending_thread_events: Optional formatted string of recent thread events.
 
     Returns:
         System prompt string.
     """
     location = state.get_current_location()
     game_time = state.get_formatted_game_time()
+    game_time_minutes = state.get_game_time_minutes()
 
     # Fetch current weather (with caching)
     weather = get_cached_weather(location)
     weather_str = str(weather) if weather else "Weather unknown"
+
+    # Build thread awareness section
+    threads_section = ""
+    if state.threads:
+        thread_list = _format_threads_for_prompt(state.threads, game_time_minutes)
+        threads_section = f"""
+## Active Threads ({len(state.threads)} parallel storylines)
+These are events/characters operating independently in the background:
+{thread_list}
+
+"""
+
+    # Build pending thread events section
+    thread_events_section = ""
+    if pending_thread_events:
+        thread_events_section = f"""
+## Recent Thread Updates
+The following happened in the background while time passed:
+{pending_thread_events}
+
+Thread updates are provided as context about what may have happened in the background.
+You may incorporate these events if they fit naturally into the world, or ignore them
+if they conflict with established facts or would break immersion. Your primary duty
+is to the player's experience of a coherent, realistic world.
+
+"""
 
     return f"""You are the narrator of a text adventure game set in the REAL WORLD. The player exists in the actual, present-day world and can explore real locations, interact with real businesses, and encounter real-world events.
 
@@ -68,16 +114,17 @@ def get_system_prompt(state: GameState) -> str:
 - The player is currently in: {location}
 - Current in-game date and time: {game_time}
 - Current weather: {weather_str}
-
-## Your Role
+{threads_section}{thread_events_section}## Your Role
 You are an immersive narrator who describes the world around the player. You should:
 1. Describe real locations, streets, landmarks, and businesses accurately
-2. Use the search_web tool SPARINGLY - only 1-2 searches when truly needed for specific facts you don't know
+2. Use the search_web tool sparingly - only 1-2 searches when truly needed for specific facts you don't know
 3. Use the advance_time tool whenever the player performs actions that take time (walking, eating, waiting, etc.)
 4. Use the update_location tool when the player moves to a significantly different place (new neighborhood, city, or country)
-5. React to the current time of day (morning, afternoon, evening, night) with appropriate descriptions
-6. Keep track of where the player is and what they're doing
-7. Make the world feel alive with realistic details, weather, people, traffic, etc.
+5. Use the spawn_thread tool when an NPC departs with their own agenda or the player starts a process that runs independently
+6. Use the update_thread tool when narrating events that affect an existing thread (see Thread Updates section)
+7. React to the current time of day (morning, afternoon, evening, night) with appropriate descriptions
+8. Keep track of where the player is and what they're doing
+9. Make the world feel alive with realistic details, weather, people, traffic, etc.
 
 ## Location Tracking
 Use the update_location tool when the player:
@@ -88,6 +135,45 @@ Use the update_location tool when the player:
 
 Do NOT call update_location for minor movements (walking down the street, entering a building in the same area).
 When calling update_location, provide the most specific address/landmark you can for the "address" field.
+
+## Thread Spawning (Parallel Storylines)
+Use the spawn_thread tool to create independent background storylines when:
+- The player hires someone or dispatches an agent (detective, delivery person, etc.)
+- An NPC leaves the scene with a specific activity that has a duration or goal
+- The player starts a process that runs independently (cooking, machine running, timer)
+- An event is set in motion that will unfold over time
+
+Examples of when to spawn threads:
+- Someone going for a run, walk, or exercise routine
+- A delivery driver continuing their route
+- Someone heading to a meeting or appointment
+- An NPC investigating or searching for something
+- Food being prepared or delivered
+- A machine running (laundry, oven timer, charging device)
+- An ongoing event (concert, game, protest, construction work)
+- Weather or natural events unfolding (storm approaching, tide coming in)
+
+Threads evolve independently when time passes and may intersect with the player later.
+Do not spawn threads for NPCs who simply walk away without a clear ongoing activity.
+Do not spawn duplicate threads - if a thread already exists for something, use update_thread instead.
+
+## Thread Updates
+Call update_thread when you narrate something that changes a thread's state:
+
+1. Thread intersects player: When a thread's subject returns or appears in the scene
+   - Example: "Your cat scratches at the door" → update_thread with status="in_scene"
+
+2. Thread resolves: When a thread completes its goal or reaches an endpoint
+   - Example: "The pizza arrives" → update_thread with status="resolved"
+   - Example: "The detective calls with findings" → update_thread with status="resolved"
+
+3. Thread pauses: When the player asks something to wait or stop temporarily
+   - Example: "Tell the cat to stay here" → update_thread with status="paused"
+
+4. Thread returns to background: After an in_scene thread leaves again
+   - Example: "The cat heads back outside" → update_thread with status="active"
+
+This keeps thread state synchronized with your narrative. Without it, a thread continues running in the background even after you've described it interacting with or returning to the player.
 
 ## Search Tool Guidelines
 - Do NOT search for every detail. Use your knowledge of the world for general descriptions.
@@ -109,8 +195,8 @@ When calling update_location, provide the most specific address/landmark you can
   - Shopping: 15-30 minutes per store
   - etc.
 
-## Action Granularity (IMPORTANT)
-Players must take realistic, step-by-step actions. If a player tries to skip steps or do something too complex in one action, DO NOT execute it. Instead, guide them to break it down:
+## Action Granularity
+Players must take realistic, step-by-step actions. If a player tries to skip steps or do something too complex in one action, don't execute it. Instead, guide them to break it down:
 
 - WRONG: "Go to Tokyo" -> Respond: "You'll need to first get to an airport, buy a plane ticket (which costs money), go through security, board the flight, etc. Where would you like to start?"
 - WRONG: "Rob the bank" -> Respond: "You look at the bank building. What specifically would you like to do? Walk inside? Look around the exterior?"
@@ -139,15 +225,16 @@ class GameNarrator:
     SONNET_INPUT_PRICE = 3.0
     SONNET_OUTPUT_PRICE = 15.0
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None):
         """
         Initialize the game narrator.
 
         Args:
             api_key: Anthropic API key. If not provided, uses ANTHROPIC_API_KEY env var.
+            model: Model to use for narration. Defaults to claude-opus-4-5.
         """
         self.client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
-        self.model = "claude-opus-4-5"
+        self.model = model or "claude-opus-4-5"
 
         # Token usage tracking
         self.opus_input_tokens = 0
@@ -196,7 +283,7 @@ class GameNarrator:
             chunk_size = max_chars // 3
             beginning = conversation_text[:chunk_size]
             middle_start = len(conversation_text) // 2 - chunk_size // 2
-            middle = conversation_text[middle_start:middle_start + chunk_size]
+            middle = conversation_text[middle_start : middle_start + chunk_size]
             end = conversation_text[-chunk_size:]
             conversation_text = f"{beginning}\n\n[...]\n\n{middle}\n\n[...]\n\n{end}"
 
@@ -222,7 +309,8 @@ Summary:"""
         user_input: str,
         state: GameState,
         progress_callback: Callable[[], None] | None = None,
-    ) -> str:
+        pending_thread_events: str | None = None,
+    ) -> tuple[str, int]:
         """
         Generate a narrative response to the player's input.
 
@@ -230,15 +318,16 @@ Summary:"""
             user_input: The player's input/action.
             state: Current game state.
             progress_callback: Optional callback to show progress during tool use.
+            pending_thread_events: Optional formatted string of recent thread events.
 
         Returns:
-            The narrator's response.
+            Tuple of (narrator's response, total minutes time advanced).
         """
         # Add user message to state
         state.add_message("user", user_input)
 
-        # Get system prompt
-        system = get_system_prompt(state)
+        # Get system prompt with thread events
+        system = get_system_prompt(state, pending_thread_events)
 
         # Get messages, trimming if needed to fit context
         messages = state.get_messages_for_api(
@@ -258,15 +347,15 @@ Summary:"""
         self._track_opus_usage(response)
 
         # Handle tool use loop
-        final_response = self._handle_tool_use(
-            response, messages, system, state, progress_callback
+        final_response, time_advanced = self._handle_tool_use(
+            response, messages, system, state, progress_callback, pending_thread_events
         )
 
         # Add assistant response to state (only if non-empty)
         if final_response.strip():
             state.add_message("assistant", final_response)
 
-        return final_response
+        return final_response, time_advanced
 
     def _handle_tool_use(
         self,
@@ -275,7 +364,8 @@ Summary:"""
         system: str,
         state: GameState,
         progress_callback: Callable[[], None] | None = None,
-    ) -> str:
+        pending_thread_events: str | None = None,
+    ) -> tuple[str, int]:
         """
         Handle tool use in a loop until we get a final text response.
 
@@ -285,10 +375,13 @@ Summary:"""
             system: System prompt.
             state: Game state (for time advancement).
             progress_callback: Optional callback to show progress.
+            pending_thread_events: Optional thread events for system prompt.
 
         Returns:
-            Final text response from the model.
+            Tuple of (final text response, total minutes time advanced).
         """
+        total_time_advanced = 0
+
         while response.stop_reason == "tool_use":
             # Find tool use blocks
             tool_uses = [block for block in response.content if isinstance(block, ToolUseBlock)]
@@ -311,6 +404,7 @@ Summary:"""
                 # Handle time advancement
                 if result.advance_time_minutes is not None:
                     state.advance_time_minutes(result.advance_time_minutes)
+                    total_time_advanced += result.advance_time_minutes
 
                 # Handle location update
                 if result.location_update is not None:
@@ -324,6 +418,55 @@ Summary:"""
                     )
                     state.set_current_location(new_location)
 
+                # Handle thread spawning
+                if result.spawn_thread_data is not None:
+                    spawn_data = result.spawn_thread_data
+                    # Create location if provided
+                    thread_location: Location | None = None
+                    if spawn_data.has_location():
+                        thread_location = Location(
+                            city=spawn_data.location_city or "",
+                            region=spawn_data.location_region or "",
+                            country=spawn_data.location_country or "",
+                            address=spawn_data.location_address,
+                        )
+                    # Create thread
+                    new_thread = Thread.create(
+                        name=spawn_data.name,
+                        description=spawn_data.description,
+                        game_time_minutes=state.get_game_time_minutes(),
+                        selection_round=state.thread_selection_round,
+                        location=thread_location,
+                    )
+                    state.threads.append(new_thread)
+
+                # Handle thread update
+                if result.update_thread_data is not None:
+                    update_data = result.update_thread_data
+                    # Find the thread by ID
+                    for thread in state.threads:
+                        if thread.id == update_data.thread_id:
+                            # Update thread fields
+                            thread.summary = update_data.summary
+                            if update_data.status in ("active", "in_scene", "paused", "resolved"):
+                                thread.status = update_data.status  # type: ignore[assignment]
+                            thread.revision += 1
+                            thread.last_advanced_at = state.get_game_time_minutes()
+
+                            # Add history entry if provided
+                            if update_data.history_entry:
+                                thread.history.append(update_data.history_entry)
+
+                            # Update location if provided
+                            if update_data.has_location():
+                                thread.location = Location(
+                                    city=update_data.location_city or "",
+                                    region=update_data.location_region or "",
+                                    country=update_data.location_country or "",
+                                    address=update_data.location_address,
+                                )
+                            break
+
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -334,13 +477,14 @@ Summary:"""
 
             # Build new messages with assistant response and tool results
             assistant_content = self._content_blocks_to_list(response.content)
-            new_messages = messages + [
+            new_messages = [
+                *messages,
                 {"role": "assistant", "content": assistant_content},
                 {"role": "user", "content": tool_results},
             ]
 
             # Make next API call with updated system prompt (time may have changed)
-            system = get_system_prompt(state)
+            system = get_system_prompt(state, pending_thread_events)
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=4096,
@@ -352,7 +496,7 @@ Summary:"""
             messages = new_messages
 
         # Extract final text response
-        return self._extract_text_response(response.content)
+        return self._extract_text_response(response.content), total_time_advanced
 
     def _content_blocks_to_list(self, content: list[ContentBlock]) -> list[dict[str, object]]:
         """Convert content blocks to a list of dicts for the API."""
@@ -383,7 +527,7 @@ Summary:"""
         self,
         state: GameState,
         progress_callback: Callable[[], None] | None = None,
-    ) -> str:
+    ) -> tuple[str, int]:
         """
         Start the game with an initial description.
 
@@ -392,7 +536,7 @@ Summary:"""
             progress_callback: Optional callback to show progress.
 
         Returns:
-            Opening narrative.
+            Tuple of (opening narrative, time advanced in minutes).
         """
         # Send an initial "start" message to kick things off
         return self.generate_response("I just arrived here. Look around.", state, progress_callback)
@@ -471,12 +615,10 @@ Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The wo
         Returns:
             Total cost in dollars.
         """
-        opus_cost = (
-            (self.opus_input_tokens / 1_000_000) * self.OPUS_INPUT_PRICE
-            + (self.opus_output_tokens / 1_000_000) * self.OPUS_OUTPUT_PRICE
-        )
-        sonnet_cost = (
-            (self.sonnet_input_tokens / 1_000_000) * self.SONNET_INPUT_PRICE
-            + (self.sonnet_output_tokens / 1_000_000) * self.SONNET_OUTPUT_PRICE
-        )
+        opus_cost = (self.opus_input_tokens / 1_000_000) * self.OPUS_INPUT_PRICE + (
+            self.opus_output_tokens / 1_000_000
+        ) * self.OPUS_OUTPUT_PRICE
+        sonnet_cost = (self.sonnet_input_tokens / 1_000_000) * self.SONNET_INPUT_PRICE + (
+            self.sonnet_output_tokens / 1_000_000
+        ) * self.SONNET_OUTPUT_PRICE
         return opus_cost + sonnet_cost

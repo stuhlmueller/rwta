@@ -1,13 +1,18 @@
 """Game state management with save/load functionality."""
 
+import contextlib
 import json
+import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
 from rwta.location import Location
+
+# Thread status values
+ThreadStatus = Literal["active", "in_scene", "paused", "resolved"]
 
 
 @dataclass
@@ -16,6 +21,166 @@ class Message:
 
     role: Literal["user", "assistant"]
     content: str
+
+
+@dataclass
+class Thread:
+    """A parallel thread - side character, machine, or mechanism operating independently."""
+
+    id: str  # UUID
+    name: str  # e.g., "Detective hired to follow John"
+    description: str  # Initial goal/purpose
+    location: Location | None  # Current location (if physical)
+    summary: str  # Short summary for selector (~100 words)
+    history: list[str]  # List of event summaries (not full messages)
+    created_at: int  # Game-time minutes since game start
+    last_advanced_at: int  # Game-time minutes since game start (for staleness calc)
+    last_selected_round: int  # Selection round marker for archiving
+    revision: int  # Increment on any thread edits (conflict detection)
+    status: ThreadStatus = "active"  # Lifecycle status: active, in_scene, paused, resolved
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        description: str,
+        game_time_minutes: int,
+        selection_round: int,
+        location: Location | None = None,
+        status: ThreadStatus = "active",
+    ) -> "Thread":
+        """Create a new thread with default values."""
+        return cls(
+            id=str(uuid.uuid4()),
+            name=name,
+            description=description,
+            location=location,
+            summary=description,  # Initial summary is the description
+            history=[],
+            created_at=game_time_minutes,
+            last_advanced_at=game_time_minutes,
+            last_selected_round=selection_round,
+            revision=0,
+            status=status,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        """Convert thread to a dictionary for JSON serialization."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "location": asdict(self.location) if self.location else None,
+            "summary": self.summary,
+            "history": self.history,
+            "created_at": self.created_at,
+            "last_advanced_at": self.last_advanced_at,
+            "last_selected_round": self.last_selected_round,
+            "revision": self.revision,
+            "status": self.status,
+        }
+
+    @classmethod
+    def from_dict(
+        cls, data: dict[str, object], parse_location: Callable[[dict[str, object]], Location]
+    ) -> "Thread":
+        """Create a Thread from a dictionary."""
+        location: Location | None = None
+        loc_data = data.get("location")
+        if loc_data is not None and isinstance(loc_data, dict):
+            location = parse_location(cast("dict[str, object]", loc_data))
+
+        history_data = data.get("history", [])
+        history: list[str] = []
+        if isinstance(history_data, list):
+            history = [str(h) for h in history_data]
+
+        def safe_int(val: object, default: int = 0) -> int:
+            if val is None:
+                return default
+            try:
+                return int(str(val))
+            except ValueError:
+                return default
+
+        # Parse status with validation and default
+        raw_status = data.get("status", "active")
+        status: ThreadStatus = "active"
+        if raw_status in ("active", "in_scene", "paused", "resolved"):
+            status = raw_status  # type: ignore[assignment]
+
+        return cls(
+            id=str(data.get("id", "")),
+            name=str(data.get("name", "")),
+            description=str(data.get("description", "")),
+            location=location,
+            summary=str(data.get("summary", "")),
+            history=history,
+            created_at=safe_int(data.get("created_at"), 0),
+            last_advanced_at=safe_int(data.get("last_advanced_at"), 0),
+            last_selected_round=safe_int(data.get("last_selected_round"), 0),
+            revision=safe_int(data.get("revision"), 0),
+            status=status,
+        )
+
+
+@dataclass
+class ThreadResult:
+    """Result from simulating a thread - used for pending results in GameState."""
+
+    thread_id: str
+    thread_name: str
+    base_revision: int  # Thread revision from snapshot
+    events: str  # Detailed narrative of what happened (for narrator context)
+    new_summary: str  # Updated summary (~100 words, replaces thread.summary)
+    new_history_entry: str  # One-sentence summary to append to thread.history
+    new_location: Location | None  # If thread moved (None = no change)
+    simulated_from: int  # Snapshot game-time minutes
+    advanced_to: int  # Game-time minutes after simulation
+
+    def to_dict(self) -> dict[str, object]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "thread_id": self.thread_id,
+            "thread_name": self.thread_name,
+            "base_revision": self.base_revision,
+            "events": self.events,
+            "new_summary": self.new_summary,
+            "new_history_entry": self.new_history_entry,
+            "new_location": asdict(self.new_location) if self.new_location else None,
+            "simulated_from": self.simulated_from,
+            "advanced_to": self.advanced_to,
+        }
+
+    @classmethod
+    def from_dict(
+        cls, data: dict[str, object], parse_location: Callable[[dict[str, object]], Location]
+    ) -> "ThreadResult":
+        """Create a ThreadResult from a dictionary."""
+        new_location: Location | None = None
+        loc_data = data.get("new_location")
+        if loc_data is not None and isinstance(loc_data, dict):
+            new_location = parse_location(cast("dict[str, object]", loc_data))
+
+        def safe_int(val: object, default: int = 0) -> int:
+            if val is None:
+                return default
+            try:
+                return int(str(val))
+            except ValueError:
+                return default
+
+        return cls(
+            thread_id=str(data.get("thread_id", "")),
+            thread_name=str(data.get("thread_name", "")),
+            base_revision=safe_int(data.get("base_revision"), 0),
+            events=str(data.get("events", "")),
+            new_summary=str(data.get("new_summary", "")),
+            new_history_entry=str(data.get("new_history_entry", "")),
+            new_location=new_location,
+            simulated_from=safe_int(data.get("simulated_from"), 0),
+            advanced_to=safe_int(data.get("advanced_to"), 0),
+        )
 
 
 @dataclass
@@ -29,7 +194,12 @@ class GameState:
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     # In-game time (starts at current real time)
     game_time: str = field(default_factory=lambda: datetime.now().isoformat())
-    version: int = 2  # Bumped for current_location migration
+    # Thread-related fields
+    threads: list[Thread] = field(default_factory=list)
+    archived_threads: list[Thread] = field(default_factory=list)
+    pending_thread_results: list[ThreadResult] | None = None
+    thread_selection_round: int = 0
+    version: int = 3  # Bumped for threads migration
 
     def get_current_location(self) -> Location:
         """Get the player's current location (falls back to starting if not set)."""
@@ -60,6 +230,17 @@ class GameState:
         """Get a human-readable formatted game time."""
         dt = self.get_game_datetime()
         return dt.strftime("%A, %B %d, %Y at %I:%M %p")
+
+    def get_game_time_minutes(self) -> int:
+        """Get minutes elapsed since game start (for thread time math)."""
+        start = datetime.fromisoformat(self.created_at)
+        current = datetime.fromisoformat(self.game_time)
+        return int((current - start).total_seconds() // 60)
+
+    def minutes_to_game_time(self, minutes: int) -> datetime:
+        """Convert minutes-since-start to datetime."""
+        start = datetime.fromisoformat(self.created_at)
+        return start + timedelta(minutes=minutes)
 
     def add_message(self, role: Literal["user", "assistant"], content: str) -> None:
         """Add a message to the conversation history."""
@@ -128,9 +309,9 @@ class GameState:
                 "role": "user",
                 "content": f"[Earlier in this adventure: {summary}]",
             }
-            return first_messages + [summary_msg] + remaining
+            return [*first_messages, summary_msg, *remaining]
 
-        return first_messages + remaining
+        return [*first_messages, *remaining]
 
     def to_dict(self) -> dict[str, object]:
         """Convert state to a dictionary for JSON serialization."""
@@ -141,6 +322,15 @@ class GameState:
             "game_time": self.game_time,
             "starting_location": asdict(self.starting_location),
             "messages": [asdict(m) for m in self.messages],
+            # Thread-related fields
+            "threads": [t.to_dict() for t in self.threads],
+            "archived_threads": [t.to_dict() for t in self.archived_threads],
+            "pending_thread_results": (
+                [r.to_dict() for r in self.pending_thread_results]
+                if self.pending_thread_results is not None
+                else None
+            ),
+            "thread_selection_round": self.thread_selection_round,
         }
         if self.current_location is not None:
             result["current_location"] = asdict(self.current_location)
@@ -155,18 +345,14 @@ class GameState:
         latitude: float | None = None
         lat_val = loc_data.get("latitude")
         if lat_val is not None:
-            try:
+            with contextlib.suppress(ValueError):
                 latitude = float(str(lat_val))
-            except ValueError:
-                pass
 
         longitude: float | None = None
         lon_val = loc_data.get("longitude")
         if lon_val is not None:
-            try:
+            with contextlib.suppress(ValueError):
                 longitude = float(str(lon_val))
-            except ValueError:
-                pass
 
         return Location(
             city=str(loc_data.get("city") or ""),
@@ -180,6 +366,20 @@ class GameState:
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "GameState":
         """Create a GameState from a dictionary."""
+
+        def safe_int(val: object, default: int = 0) -> int:
+            if val is None:
+                return default
+            try:
+                return int(str(val))
+            except ValueError:
+                return default
+
+        # Handle version migration
+        version = safe_int(data.get("version"), 1)
+        if version < 3:
+            data = cls._migrate_to_v3(data)
+
         location_data = data["starting_location"]
         if not isinstance(location_data, dict):
             raise ValueError("Invalid location data")
@@ -202,7 +402,7 @@ class GameState:
         messages: list[Message] = []
         for item in messages_data:
             if isinstance(item, dict):
-                msg = cast(dict[str, object], item)
+                msg = cast("dict[str, object]", item)
                 role = msg.get("role")
                 content = msg.get("content")
                 if role == "user" and isinstance(content, str):
@@ -215,6 +415,39 @@ class GameState:
         if game_time is None:
             game_time = datetime.now().isoformat()
 
+        # Parse threads
+        threads: list[Thread] = []
+        threads_data = data.get("threads", [])
+        if isinstance(threads_data, list):
+            for t_data in threads_data:
+                if isinstance(t_data, dict):
+                    threads.append(
+                        Thread.from_dict(cast("dict[str, object]", t_data), cls._parse_location)
+                    )
+
+        # Parse archived_threads
+        archived_threads: list[Thread] = []
+        archived_data = data.get("archived_threads", [])
+        if isinstance(archived_data, list):
+            for t_data in archived_data:
+                if isinstance(t_data, dict):
+                    archived_threads.append(
+                        Thread.from_dict(cast("dict[str, object]", t_data), cls._parse_location)
+                    )
+
+        # Parse pending_thread_results
+        pending_thread_results: list[ThreadResult] | None = None
+        pending_data = data.get("pending_thread_results")
+        if pending_data is not None and isinstance(pending_data, list):
+            pending_thread_results = []
+            for r_data in pending_data:
+                if isinstance(r_data, dict):
+                    pending_thread_results.append(
+                        ThreadResult.from_dict(
+                            cast("dict[str, object]", r_data), cls._parse_location
+                        )
+                    )
+
         return cls(
             starting_location=starting_location,
             current_location=current_location,
@@ -222,8 +455,22 @@ class GameState:
             created_at=str(data.get("created_at", "")),
             updated_at=str(data.get("updated_at", "")),
             game_time=str(game_time),
-            version=2,  # Upgrade to current version
+            threads=threads,
+            archived_threads=archived_threads,
+            pending_thread_results=pending_thread_results,
+            thread_selection_round=safe_int(data.get("thread_selection_round"), 0),
+            version=3,  # Upgrade to current version
         )
+
+    @classmethod
+    def _migrate_to_v3(cls, data: dict[str, object]) -> dict[str, object]:
+        """Migrate save data from v1/v2 to v3 (add thread fields)."""
+        data["threads"] = []
+        data["archived_threads"] = []
+        data["pending_thread_results"] = None
+        data["thread_selection_round"] = 0
+        data["version"] = 3
+        return data
 
 
 def get_saves_dir() -> Path:

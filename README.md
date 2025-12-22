@@ -10,6 +10,7 @@ https://github.com/user-attachments/assets/f29b9d63-627f-4cc2-be09-98e0beb96e17
 - **Live data**: The game uses web search to fetch current information about places, news, weather, and more
 - **Dynamic time**: In-game time passes realistically based on your actions (walking, eating, traveling)
 - **Location tracking**: Your current location updates as you move through the world, with weather that changes based on where you are
+- **Parallel threads**: Spawn independent characters, NPCs, or processes that operate in the background while you continue your adventure
 - **Save/load**: Save your progress and continue later
 - **Action granularity**: Experience the world step-by-step - no teleporting or skipping ahead
 
@@ -46,8 +47,11 @@ python -m rwta.main
 # Or if installed
 text-adventure
 
-# Load a saved game
-python -m rwta.main saves/your_save.json
+# Start fresh (ignore saved games)
+python -m rwta.main --new
+
+# Fast mode (Sonnet, no typewriter delay, no auto-save)
+python -m rwta.main --fast
 ```
 
 ## Commands
@@ -60,6 +64,7 @@ python -m rwta.main saves/your_save.json
 | `/time` | Show current in-game time |
 | `/where` | Show current location and time |
 | `/tokens` | Show token usage and context limit |
+| `/threads` | Show active parallel threads |
 | `/look` | Re-describe your current surroundings |
 | `/quit` | Exit the game |
 
@@ -78,7 +83,13 @@ You can also press `Ctrl-C` twice to save and quit.
 
 4. **Web Search**: Claude can search the web to get accurate information about real places, current events, business hours, etc.
 
-5. **Granular Actions**: You must take realistic step-by-step actions. To fly somewhere, you need to get to the airport, buy a ticket, board the plane, etc.
+5. **Parallel Threads**: When you hire an agent, dispatch an NPC, or start a background process, the game creates a "thread" - an independent storyline that evolves in the background. Threads advance whenever in-game time passes:
+   - Each thread has its own location, history, and state
+   - A smart selector picks the most relevant threads to advance (based on staleness, proximity, activity)
+   - Thread events may intersect with your story when they become relevant
+   - Use `/threads` to see active threads and their current states
+
+6. **Granular Actions**: You must take realistic step-by-step actions. To fly somewhere, you need to get to the airport, buy a ticket, board the plane, etc.
 
 ## License
 

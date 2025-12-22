@@ -1,5 +1,6 @@
 """Web search tool for the LLM to fetch real-world information."""
 
+import contextlib
 import re
 from html import unescape
 from html.parser import HTMLParser
@@ -102,10 +103,117 @@ UPDATE_LOCATION_TOOL: ToolDefinition = {
     },
 }
 
+SPAWN_THREAD_TOOL: ToolDefinition = {
+    "name": "spawn_thread",
+    "description": (
+        "Create a new parallel thread - an independent character, machine, or mechanism that "
+        "operates in the background while the player continues their adventure. Use this when: "
+        "(1) The player hires someone or dispatches an agent on a mission, "
+        "(2) An NPC leaves the scene with their own agenda, "
+        "(3) The player starts a process that runs independently (cooking, machine running, etc.), "
+        "(4) An event is set in motion that will unfold over time. "
+        "Threads evolve independently when time passes and may intersect with the player later. "
+        "Only spawn once per storyline - check the active threads list first and use update_thread "
+        "if a thread for this character/event already exists."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Short name for the thread (e.g., 'Detective following John', 'Pizza in oven')",
+            },
+            "description": {
+                "type": "string",
+                "description": "Initial description of the thread's goal/purpose and current state",
+            },
+            "location_city": {
+                "type": "string",
+                "description": "City where the thread is located (optional, if physical)",
+            },
+            "location_region": {
+                "type": "string",
+                "description": "Region/state where the thread is located (optional)",
+            },
+            "location_country": {
+                "type": "string",
+                "description": "Country where the thread is located (optional)",
+            },
+            "location_address": {
+                "type": "string",
+                "description": "Specific address or landmark (optional)",
+            },
+        },
+        "required": ["name", "description"],
+    },
+}
+
+UPDATE_THREAD_TOOL: ToolDefinition = {
+    "name": "update_thread",
+    "description": (
+        "Update the state of an existing background thread when narrating an event that affects it. "
+        "Call this tool when: "
+        "(1) A thread intersects with the player's scene (NPC returns, event reaches player), "
+        "(2) A thread is resolved or completed (task finished, person arrived at destination), "
+        "(3) A thread's status changes due to player actions (dismissed, paused, etc.). "
+        "This keeps thread state synchronized with the narrative you're describing."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "thread_id": {
+                "type": "string",
+                "description": "The ID of the thread to update (from the active threads list)",
+            },
+            "summary": {
+                "type": "string",
+                "description": "Updated summary of the thread's current state (~50-100 words)",
+            },
+            "status": {
+                "type": "string",
+                "enum": ["active", "in_scene", "paused", "resolved"],
+                "description": (
+                    "New status: 'active' (still running in background), "
+                    "'in_scene' (currently interacting with player), "
+                    "'paused' (temporarily suspended), "
+                    "'resolved' (completed/finished)"
+                ),
+            },
+            "history_entry": {
+                "type": "string",
+                "description": "One sentence to add to thread history log (optional)",
+            },
+            "location_city": {
+                "type": "string",
+                "description": "New city if thread moved (optional)",
+            },
+            "location_region": {
+                "type": "string",
+                "description": "New region/state if thread moved (optional)",
+            },
+            "location_country": {
+                "type": "string",
+                "description": "New country if thread moved (optional)",
+            },
+            "location_address": {
+                "type": "string",
+                "description": "New specific address or landmark (optional)",
+            },
+        },
+        "required": ["thread_id", "summary", "status"],
+    },
+}
+
 
 def get_tools() -> list[ToolDefinition]:
     """Return the list of available tools."""
-    return [SEARCH_WEB_TOOL, ADVANCE_TIME_TOOL, UPDATE_LOCATION_TOOL]
+    return [
+        SEARCH_WEB_TOOL,
+        ADVANCE_TIME_TOOL,
+        UPDATE_LOCATION_TOOL,
+        SPAWN_THREAD_TOOL,
+        UPDATE_THREAD_TOOL,
+    ]
 
 
 def search_web(query: str, max_results: int = 5, timeout: float = 10.0) -> str:
@@ -168,6 +276,7 @@ def _parse_duckduckgo_html(html: str, max_results: int) -> list[dict[str, str]]:
     Returns:
         List of dictionaries with 'title' and 'snippet' keys.
     """
+
     class _DDGParser(HTMLParser):
         def __init__(self):
             super().__init__()
@@ -259,6 +368,58 @@ class LocationUpdate:
         self.longitude = longitude
 
 
+class SpawnThreadData:
+    """Data for spawning a new thread."""
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        location_city: str | None = None,
+        location_region: str | None = None,
+        location_country: str | None = None,
+        location_address: str | None = None,
+    ):
+        self.name = name
+        self.description = description
+        self.location_city = location_city
+        self.location_region = location_region
+        self.location_country = location_country
+        self.location_address = location_address
+
+    def has_location(self) -> bool:
+        """Check if any location data is provided."""
+        return bool(self.location_city or self.location_region or self.location_country)
+
+
+class UpdateThreadData:
+    """Data for updating an existing thread."""
+
+    def __init__(
+        self,
+        thread_id: str,
+        summary: str,
+        status: str,
+        history_entry: str | None = None,
+        location_city: str | None = None,
+        location_region: str | None = None,
+        location_country: str | None = None,
+        location_address: str | None = None,
+    ):
+        self.thread_id = thread_id
+        self.summary = summary
+        self.status = status
+        self.history_entry = history_entry
+        self.location_city = location_city
+        self.location_region = location_region
+        self.location_country = location_country
+        self.location_address = location_address
+
+    def has_location(self) -> bool:
+        """Check if any location data is provided."""
+        return bool(self.location_city or self.location_region or self.location_country)
+
+
 class ToolResult:
     """Result of a tool execution."""
 
@@ -268,11 +429,15 @@ class ToolResult:
         advance_time_minutes: int | None = None,
         advance_time_reason: str | None = None,
         location_update: LocationUpdate | None = None,
+        spawn_thread_data: SpawnThreadData | None = None,
+        update_thread_data: UpdateThreadData | None = None,
     ):
         self.message = message
         self.advance_time_minutes = advance_time_minutes
         self.advance_time_reason = advance_time_reason
         self.location_update = location_update
+        self.spawn_thread_data = spawn_thread_data
+        self.update_thread_data = update_thread_data
 
 
 def execute_tool(tool_name: str, tool_input: dict[str, object]) -> ToolResult:
@@ -326,16 +491,12 @@ def execute_tool(tool_name: str, tool_input: dict[str, object]) -> ToolResult:
         longitude: float | None = None
 
         if lat_val is not None:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 latitude = float(lat_val)  # type: ignore[arg-type]
-            except (ValueError, TypeError):
-                pass
 
         if lon_val is not None:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 longitude = float(lon_val)  # type: ignore[arg-type]
-            except (ValueError, TypeError):
-                pass
 
         location_update = LocationUpdate(
             city=city,
@@ -350,6 +511,76 @@ def execute_tool(tool_name: str, tool_input: dict[str, object]) -> ToolResult:
         return ToolResult(
             f"Location updated to: {location_str}, {region}, {country}",
             location_update=location_update,
+        )
+
+    if tool_name == "spawn_thread":
+        name = str(tool_input.get("name", "")).strip()
+        description = str(tool_input.get("description", "")).strip()
+
+        if not name or not description:
+            return ToolResult("Error: name and description are required")
+
+        # Extract optional location fields
+        loc_city = tool_input.get("location_city")
+        loc_region = tool_input.get("location_region")
+        loc_country = tool_input.get("location_country")
+        loc_address = tool_input.get("location_address")
+
+        spawn_data = SpawnThreadData(
+            name=name,
+            description=description,
+            location_city=str(loc_city).strip() if loc_city else None,
+            location_region=str(loc_region).strip() if loc_region else None,
+            location_country=str(loc_country).strip() if loc_country else None,
+            location_address=str(loc_address).strip() if loc_address else None,
+        )
+
+        location_info = ""
+        if spawn_data.has_location():
+            parts = [p for p in [spawn_data.location_address, spawn_data.location_city] if p]
+            location_info = f" at {', '.join(parts)}" if parts else ""
+
+        return ToolResult(
+            f"Thread spawned: '{name}'{location_info}",
+            spawn_thread_data=spawn_data,
+        )
+
+    if tool_name == "update_thread":
+        thread_id = str(tool_input.get("thread_id", "")).strip()
+        summary = str(tool_input.get("summary", "")).strip()
+        status = str(tool_input.get("status", "")).strip()
+
+        if not thread_id or not summary or not status:
+            return ToolResult("Error: thread_id, summary, and status are required")
+
+        # Validate status
+        valid_statuses = {"active", "in_scene", "paused", "resolved"}
+        if status not in valid_statuses:
+            return ToolResult(f"Error: invalid status '{status}'. Must be one of: {valid_statuses}")
+
+        # Extract optional fields
+        history_entry_val = tool_input.get("history_entry")
+        history_entry = str(history_entry_val).strip() if history_entry_val else None
+
+        loc_city = tool_input.get("location_city")
+        loc_region = tool_input.get("location_region")
+        loc_country = tool_input.get("location_country")
+        loc_address = tool_input.get("location_address")
+
+        update_data = UpdateThreadData(
+            thread_id=thread_id,
+            summary=summary,
+            status=status,
+            history_entry=history_entry,
+            location_city=str(loc_city).strip() if loc_city else None,
+            location_region=str(loc_region).strip() if loc_region else None,
+            location_country=str(loc_country).strip() if loc_country else None,
+            location_address=str(loc_address).strip() if loc_address else None,
+        )
+
+        return ToolResult(
+            f"Thread updated: status={status}",
+            update_thread_data=update_data,
         )
 
     return ToolResult(f"Unknown tool: {tool_name}")

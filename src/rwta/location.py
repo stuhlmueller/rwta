@@ -91,6 +91,79 @@ def get_city_from_ip(timeout: float = 5.0) -> Location:
         )
 
 
+def geocode_address(address: str, timeout: float = 5.0) -> Location | None:
+    """
+    Geocode an address using Nominatim (OpenStreetMap).
+
+    Args:
+        address: Free-form address string to geocode.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        Location object with parsed address components, or None if geocoding fails.
+    """
+    try:
+        response = httpx.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": address,
+                "format": "json",
+                "addressdetails": 1,
+                "limit": 1,
+            },
+            headers={"User-Agent": "RealWorldTextAdventure/1.0"},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        results = response.json()
+
+        if not results:
+            return None
+
+        result = results[0]
+        addr = result.get("address", {})
+
+        # Extract city - try various fields
+        city = (
+            addr.get("city")
+            or addr.get("town")
+            or addr.get("village")
+            or addr.get("municipality")
+            or addr.get("county")
+            or ""
+        )
+
+        # Extract region/state
+        region = addr.get("state") or addr.get("region") or ""
+
+        # Extract country
+        country = addr.get("country") or ""
+
+        # Build street address from components
+        street_parts = []
+        if addr.get("house_number"):
+            street_parts.append(addr["house_number"])
+        if addr.get("road"):
+            street_parts.append(addr["road"])
+        street_address = " ".join(street_parts) if street_parts else None
+
+        # If no street address, use the display name minus city/country
+        if not street_address and result.get("display_name"):
+            street_address = result["display_name"].split(",")[0].strip()
+
+        return Location(
+            city=city,
+            region=region,
+            country=country,
+            address=street_address,
+            latitude=float(result.get("lat", 0)),
+            longitude=float(result.get("lon", 0)),
+        )
+
+    except (httpx.HTTPError, ValueError, KeyError, IndexError):
+        return None
+
+
 def prompt_for_address(city_location: Location) -> Location:
     """
     Prompt the user for a specific street address within their city.
@@ -120,7 +193,25 @@ def prompt_for_address(city_location: Location) -> Location:
         readline.set_startup_hook(None)
 
     if address:
-        city_location.address = address
+        # Check if user entered a completely different location
+        # (doesn't contain original city name)
+        original_city = city_location.city.lower() if city_location.city else ""
+        if original_city and original_city not in address.lower():
+            # User entered a different location - geocode it
+            geocoded = geocode_address(address)
+            if geocoded:
+                return geocoded
+            else:
+                # Geocoding failed - use address as-is, clear old location data
+                city_location.address = address
+                city_location.city = ""
+                city_location.region = ""
+                city_location.country = ""
+                city_location.latitude = None
+                city_location.longitude = None
+        else:
+            # User edited within same city - just update address
+            city_location.address = address
     else:
         # Let the LLM pick a starting point
         city_location.address = None

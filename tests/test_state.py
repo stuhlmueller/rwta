@@ -5,8 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from rwta.location import Location  # noqa: E402
-from rwta.state import GameState  # noqa: E402
+from rwta.location import Location
+from rwta.state import GameState
 
 
 class TestGameState(unittest.TestCase):
@@ -21,7 +21,9 @@ class TestGameState(unittest.TestCase):
         loaded = GameState.from_dict(data)
 
         self.assertEqual(str(loaded.starting_location), "123 Main St, X, Y, Z")
-        self.assertEqual([(m.role, m.content) for m in loaded.messages], [("user", "hi"), ("assistant", "hello")])
+        self.assertEqual(
+            [(m.role, m.content) for m in loaded.messages], [("user", "hi"), ("assistant", "hello")]
+        )
 
     def test_from_dict_skips_invalid_messages(self) -> None:
         data = {
@@ -79,7 +81,9 @@ class TestGameState(unittest.TestCase):
         state = GameState(
             starting_location=Location(city="SF", region="CA", country="US"),
         )
-        state.set_current_location(Location(city="LA", region="CA", country="US", latitude=34.0, longitude=-118.0))
+        state.set_current_location(
+            Location(city="LA", region="CA", country="US", latitude=34.0, longitude=-118.0)
+        )
 
         data = state.to_dict()
         self.assertIn("current_location", data)
@@ -106,4 +110,3 @@ class TestGameState(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
