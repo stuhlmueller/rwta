@@ -4,6 +4,14 @@ A terminal-based open-world text adventure set in the **real world**, powered by
 
 https://github.com/user-attachments/assets/f29b9d63-627f-4cc2-be09-98e0beb96e17
 
+## Quickstart
+
+```bash
+pip install git+https://github.com/stuhlmueller/rwta.git
+export ANTHROPIC_API_KEY='your-api-key'
+rwta
+```
+
 ## Features
 
 - **Real-world setting**: Start from your current location (via IP geolocation) or enter a specific address
@@ -19,8 +27,8 @@ Requires Python 3.11+.
 
 ```bash
 # Clone the repository
-git clone <repo-url>
-cd text-adventure
+git clone https://github.com/stuhlmueller/rwta.git
+cd rwta
 
 # Install dependencies
 pip install -e .
@@ -45,7 +53,7 @@ export ANTHROPIC_API_KEY='your-api-key'
 python -m rwta.main
 
 # Or if installed
-text-adventure
+rwta
 
 # Skip the menu and start a fresh game
 python -m rwta.main --new
@@ -62,6 +70,7 @@ python -m rwta.main --new
 | `/where` | Show current location and time |
 | `/tokens` | Show token usage and context limit |
 | `/look` | Re-describe your current surroundings |
+| `/export [name]` | Export story as markdown file |
 | `/quit` | Exit the game |
 
 You can also press `Ctrl-C` twice to save and quit.

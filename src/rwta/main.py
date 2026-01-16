@@ -152,6 +152,63 @@ def cmd_tokens(state: GameState, narrator: GameNarrator, args: str) -> CommandRe
     return CommandResult()
 
 
+def _sanitize_city_slug(city: str) -> str:
+    """Convert a city name to a URL-safe slug."""
+    slug = city.lower().replace(" ", "-")
+    return "".join(c for c in slug if c.isalnum() or c == "-")
+
+
+def _strip_suggestions(content: str) -> str:
+    """Remove the suggestions section from assistant message content."""
+    if "---" in content:
+        return content.rsplit("---", 1)[0].strip()
+    return content
+
+
+@command("export", "Export story as markdown")
+def cmd_export(state: GameState, narrator: GameNarrator, args: str) -> CommandResult:
+    """Export the entire story as a markdown file."""
+    from datetime import datetime
+
+    if not state.messages:
+        print_error("No story to export yet.")
+        return CommandResult()
+
+    location = state.starting_location
+    lines = [
+        f"# {location.city} Adventure",
+        "",
+        f"*Started: {state.created_at[:10]}*",
+        f"*Location: {location}*",
+        "",
+        "---",
+        "",
+    ]
+
+    for msg in state.messages:
+        if msg.role == "user":
+            lines.append(f"**> {msg.content}**")
+        else:
+            lines.append(_strip_suggestions(msg.content))
+        lines.append("")
+
+    markdown = "\n".join(lines)
+
+    city_slug = _sanitize_city_slug(location.city)
+    timestamp = datetime.now().strftime("%Y%m%d")
+    filename = args.strip() if args.strip() else f"{city_slug}-{timestamp}.md"
+    if not filename.endswith(".md"):
+        filename += ".md"
+
+    exports_dir = Path(__file__).parent.parent.parent / "exports"
+    exports_dir.mkdir(exist_ok=True)
+    filepath = exports_dir / filename
+
+    filepath.write_text(markdown, encoding="utf-8")
+    print_success(f"Story exported to: {filepath}")
+    return CommandResult()
+
+
 @command("look", "Look around (re-describe surroundings)")
 def cmd_look(state: GameState, narrator: GameNarrator, args: str) -> CommandResult:
     """Re-describe the current surroundings."""
@@ -233,8 +290,7 @@ def _print_status_line(state: GameState) -> None:
     location = state.get_current_location()
     game_dt = state.get_game_datetime()
     time_str = game_dt.strftime("%a %I:%M %p")
-    location_str = location.short_str() if hasattr(location, "short_str") else str(location)
-    print_status(location_str, time_str)
+    print_status(location.short_str(), time_str)
 
 
 def _count_conversation_words(state: GameState) -> int:

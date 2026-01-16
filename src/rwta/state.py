@@ -204,14 +204,13 @@ class GameState:
 
         messages: list[Message] = []
         for item in messages_data:
-            if isinstance(item, dict):
-                msg = cast(dict[str, object], item)
-                role = msg.get("role")
-                content = msg.get("content")
-                if role == "user" and isinstance(content, str):
-                    messages.append(Message(role="user", content=content))
-                elif role == "assistant" and isinstance(content, str):
-                    messages.append(Message(role="assistant", content=content))
+            if not isinstance(item, dict):
+                continue
+            msg = cast(dict[str, object], item)
+            role = msg.get("role")
+            content = msg.get("content")
+            if role in ("user", "assistant") and isinstance(content, str):
+                messages.append(Message(role=role, content=content))
 
         # Handle game_time, defaulting to now if not present (for old saves)
         game_time = data.get("game_time")

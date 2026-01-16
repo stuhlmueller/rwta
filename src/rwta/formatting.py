@@ -12,6 +12,11 @@ from rich.text import Text
 # Shared console instance
 console = Console()
 
+# ANSI escape codes for text styling
+ANSI_BOLD = "\033[1m"
+ANSI_ITALIC = "\033[3m"
+ANSI_RESET = "\033[0m"
+
 
 def print_markdown(text: str) -> None:
     """Print markdown-formatted text using rich."""
@@ -103,78 +108,83 @@ def print_narrative(text: str, typewriter: bool = True) -> None:
         print_markdown(text)
 
 
+def _is_single_asterisk(line: str, pos: int) -> bool:
+    """Check if the asterisk at pos is a single asterisk (not part of **)."""
+    if line[pos] != "*":
+        return False
+    next_is_asterisk = pos + 1 < len(line) and line[pos + 1] == "*"
+    prev_is_asterisk = pos > 0 and line[pos - 1] == "*"
+    return not next_is_asterisk and not prev_is_asterisk
+
+
 def _typewriter_paragraph(text: str, delay: float = 0.05) -> None:
     """Print a paragraph with typewriter effect, word by word. Handles **bold** and *italic*."""
-    # ANSI codes
-    BOLD = "\033[1m"
-    ITALIC = "\033[3m"
-    RESET = "\033[0m"
-
     lines = text.split("\n")
     for line_idx, line in enumerate(lines):
-        # Process markdown markers in the line
-        i = 0
-        in_bold = False
-        in_italic = False
-        current_word = ""
-        tokens: list[str] = []
+        tokens = _tokenize_markdown_line(line)
 
-        while i < len(line):
-            # Check for ** bold marker (must check before single *)
-            if line[i : i + 2] == "**":
-                if current_word:
-                    tokens.append(current_word)
-                    current_word = ""
-                if in_bold:
-                    tokens.append(RESET + (ITALIC if in_italic else ""))
-                else:
-                    tokens.append(BOLD)
-                in_bold = not in_bold
-                i += 2
-                continue
-
-            # Check for * italic marker (single asterisk, not part of **)
-            is_single_asterisk = line[i] == "*" and (i + 1 >= len(line) or line[i + 1] != "*")
-            not_preceded_by_asterisk = i == 0 or line[i - 1] != "*"
-            if is_single_asterisk and not_preceded_by_asterisk:
-                if current_word:
-                    tokens.append(current_word)
-                    current_word = ""
-                if in_italic:
-                    tokens.append(RESET + (BOLD if in_bold else ""))
-                else:
-                    tokens.append(ITALIC)
-                in_italic = not in_italic
-                i += 1
-                continue
-
-            # Check for space (word boundary)
-            if line[i] == " ":
-                if current_word:
-                    tokens.append(current_word)
-                    current_word = ""
-                tokens.append(" ")
-            else:
-                current_word += line[i]
-            i += 1
-
-        if current_word:
-            tokens.append(current_word)
-
-        # Reset at end of line if styles still active
-        if in_bold or in_italic:
-            tokens.append(RESET)
-
-        # Print with typewriter effect
         for token in tokens:
             print(token, end="", flush=True)
-            # Add delay after words (not ANSI codes or spaces)
-            is_ansi_code = token in (BOLD, ITALIC, RESET) or token.startswith("\033[")
-            if not is_ansi_code and token != " ":
+            is_ansi = token.startswith("\033[")
+            if not is_ansi and token != " ":
                 time.sleep(delay)
 
         if line_idx < len(lines) - 1:
             print()
+
+
+def _tokenize_markdown_line(line: str) -> list[str]:
+    """Tokenize a line, converting markdown bold/italic to ANSI codes."""
+    tokens: list[str] = []
+    current_word = ""
+    in_bold = False
+    in_italic = False
+    i = 0
+
+    while i < len(line):
+        # Check for ** bold marker (must check before single *)
+        if line[i : i + 2] == "**":
+            if current_word:
+                tokens.append(current_word)
+                current_word = ""
+            if in_bold:
+                tokens.append(ANSI_RESET + (ANSI_ITALIC if in_italic else ""))
+            else:
+                tokens.append(ANSI_BOLD)
+            in_bold = not in_bold
+            i += 2
+            continue
+
+        # Check for * italic marker
+        if _is_single_asterisk(line, i):
+            if current_word:
+                tokens.append(current_word)
+                current_word = ""
+            if in_italic:
+                tokens.append(ANSI_RESET + (ANSI_BOLD if in_bold else ""))
+            else:
+                tokens.append(ANSI_ITALIC)
+            in_italic = not in_italic
+            i += 1
+            continue
+
+        # Check for space (word boundary)
+        if line[i] == " ":
+            if current_word:
+                tokens.append(current_word)
+                current_word = ""
+            tokens.append(" ")
+        else:
+            current_word += line[i]
+        i += 1
+
+    if current_word:
+        tokens.append(current_word)
+
+    if in_bold or in_italic:
+        tokens.append(ANSI_RESET)
+
+    return tokens
 
 
 def parse_suggestions(text: str) -> tuple[str, list[str]]:
