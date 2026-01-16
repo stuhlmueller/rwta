@@ -11,7 +11,6 @@ from rwta.location import Location, Weather, get_weather
 from rwta.state import GameState
 from rwta.tools import execute_tool, get_tools
 
-
 # Weather cache: stores (location_key, timestamp, weather) tuples
 _weather_cache: dict[str, tuple[float, Weather | None]] = {}
 WEATHER_CACHE_TTL_SECONDS = 300  # 5 minutes
@@ -196,7 +195,7 @@ class GameNarrator:
             chunk_size = max_chars // 3
             beginning = conversation_text[:chunk_size]
             middle_start = len(conversation_text) // 2 - chunk_size // 2
-            middle = conversation_text[middle_start:middle_start + chunk_size]
+            middle = conversation_text[middle_start : middle_start + chunk_size]
             end = conversation_text[-chunk_size:]
             conversation_text = f"{beginning}\n\n[...]\n\n{middle}\n\n[...]\n\n{end}"
 
@@ -258,9 +257,7 @@ Summary:"""
         self._track_opus_usage(response)
 
         # Handle tool use loop
-        final_response = self._handle_tool_use(
-            response, messages, system, state, progress_callback
-        )
+        final_response = self._handle_tool_use(response, messages, system, state, progress_callback)
 
         # Add assistant response to state (only if non-empty)
         if final_response.strip():
@@ -409,15 +406,16 @@ Summary:"""
             A short, fun message to show while loading.
         """
         location = state.starting_location
-        game_time = state.get_game_datetime()
-        hour = game_time.hour
+        hour = state.get_game_datetime().hour
 
         # Time-based context
-        if 5 <= hour < 12:
+        if hour < 5:
+            time_context = "night"
+        elif hour < 12:
             time_context = "morning"
-        elif 12 <= hour < 17:
+        elif hour < 17:
             time_context = "afternoon"
-        elif 17 <= hour < 21:
+        elif hour < 21:
             time_context = "evening"
         else:
             time_context = "night"
@@ -471,12 +469,10 @@ Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The wo
         Returns:
             Total cost in dollars.
         """
-        opus_cost = (
-            (self.opus_input_tokens / 1_000_000) * self.OPUS_INPUT_PRICE
-            + (self.opus_output_tokens / 1_000_000) * self.OPUS_OUTPUT_PRICE
-        )
-        sonnet_cost = (
-            (self.sonnet_input_tokens / 1_000_000) * self.SONNET_INPUT_PRICE
-            + (self.sonnet_output_tokens / 1_000_000) * self.SONNET_OUTPUT_PRICE
-        )
+        opus_cost = (self.opus_input_tokens / 1_000_000) * self.OPUS_INPUT_PRICE + (
+            self.opus_output_tokens / 1_000_000
+        ) * self.OPUS_OUTPUT_PRICE
+        sonnet_cost = (self.sonnet_input_tokens / 1_000_000) * self.SONNET_INPUT_PRICE + (
+            self.sonnet_output_tokens / 1_000_000
+        ) * self.SONNET_OUTPUT_PRICE
         return opus_cost + sonnet_cost

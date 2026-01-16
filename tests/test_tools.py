@@ -33,12 +33,15 @@ class TestTools(unittest.TestCase):
         self.assertIn("non-negative", result.message)
 
     def test_update_location_returns_location_update(self) -> None:
-        result = execute_tool("update_location", {
-            "city": "Tokyo",
-            "region": "Tokyo",
-            "country": "Japan",
-            "address": "Shibuya Station",
-        })
+        result = execute_tool(
+            "update_location",
+            {
+                "city": "Tokyo",
+                "region": "Tokyo",
+                "country": "Japan",
+                "address": "Shibuya Station",
+            },
+        )
         self.assertIn("Tokyo", result.message)
         assert result.location_update is not None
         self.assertEqual(result.location_update.city, "Tokyo")
@@ -50,13 +53,16 @@ class TestTools(unittest.TestCase):
         self.assertIsNone(result.location_update)
 
     def test_update_location_handles_coordinates(self) -> None:
-        result = execute_tool("update_location", {
-            "city": "Paris",
-            "region": "Ile-de-France",
-            "country": "France",
-            "latitude": 48.8566,
-            "longitude": 2.3522,
-        })
+        result = execute_tool(
+            "update_location",
+            {
+                "city": "Paris",
+                "region": "Ile-de-France",
+                "country": "France",
+                "latitude": 48.8566,
+                "longitude": 2.3522,
+            },
+        )
         assert result.location_update is not None
         self.assertEqual(result.location_update.latitude, 48.8566)
         self.assertEqual(result.location_update.longitude, 2.3522)
@@ -64,4 +70,3 @@ class TestTools(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

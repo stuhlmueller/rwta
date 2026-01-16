@@ -25,8 +25,9 @@ cd text-adventure
 # Install dependencies
 pip install -e .
 
-# Or with pip directly
-pip install anthropic httpx
+# For development (includes ruff, pyright, pytest, pre-commit)
+pip install -e ".[dev]"
+pre-commit install
 ```
 
 ## Configuration
@@ -40,14 +41,14 @@ export ANTHROPIC_API_KEY='your-api-key'
 ## Usage
 
 ```bash
-# Start a new game
+# Start the game (shows menu to continue a story or start new)
 python -m rwta.main
 
 # Or if installed
 text-adventure
 
-# Load a saved game
-python -m rwta.main saves/your_save.json
+# Skip the menu and start a fresh game
+python -m rwta.main --new
 ```
 
 ## Commands

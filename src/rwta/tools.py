@@ -1,6 +1,7 @@
 """Web search tool for the LLM to fetch real-world information."""
 
 import re
+from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 from typing import TypedDict
@@ -168,6 +169,7 @@ def _parse_duckduckgo_html(html: str, max_results: int) -> list[dict[str, str]]:
     Returns:
         List of dictionaries with 'title' and 'snippet' keys.
     """
+
     class _DDGParser(HTMLParser):
         def __init__(self):
             super().__init__()
@@ -239,40 +241,26 @@ def _parse_duckduckgo_html(html: str, max_results: int) -> list[dict[str, str]]:
     return results
 
 
+@dataclass
 class LocationUpdate:
     """Data for a location update."""
 
-    def __init__(
-        self,
-        city: str,
-        region: str,
-        country: str,
-        address: str | None = None,
-        latitude: float | None = None,
-        longitude: float | None = None,
-    ):
-        self.city = city
-        self.region = region
-        self.country = country
-        self.address = address
-        self.latitude = latitude
-        self.longitude = longitude
+    city: str
+    region: str
+    country: str
+    address: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
 
 
+@dataclass
 class ToolResult:
     """Result of a tool execution."""
 
-    def __init__(
-        self,
-        message: str,
-        advance_time_minutes: int | None = None,
-        advance_time_reason: str | None = None,
-        location_update: LocationUpdate | None = None,
-    ):
-        self.message = message
-        self.advance_time_minutes = advance_time_minutes
-        self.advance_time_reason = advance_time_reason
-        self.location_update = location_update
+    message: str
+    advance_time_minutes: int | None = None
+    advance_time_reason: str | None = None
+    location_update: LocationUpdate | None = None
 
 
 def execute_tool(tool_name: str, tool_input: dict[str, object]) -> ToolResult:

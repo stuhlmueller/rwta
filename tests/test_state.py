@@ -21,7 +21,9 @@ class TestGameState(unittest.TestCase):
         loaded = GameState.from_dict(data)
 
         self.assertEqual(str(loaded.starting_location), "123 Main St, X, Y, Z")
-        self.assertEqual([(m.role, m.content) for m in loaded.messages], [("user", "hi"), ("assistant", "hello")])
+        self.assertEqual(
+            [(m.role, m.content) for m in loaded.messages], [("user", "hi"), ("assistant", "hello")]
+        )
 
     def test_from_dict_skips_invalid_messages(self) -> None:
         data = {
@@ -79,7 +81,9 @@ class TestGameState(unittest.TestCase):
         state = GameState(
             starting_location=Location(city="SF", region="CA", country="US"),
         )
-        state.set_current_location(Location(city="LA", region="CA", country="US", latitude=34.0, longitude=-118.0))
+        state.set_current_location(
+            Location(city="LA", region="CA", country="US", latitude=34.0, longitude=-118.0)
+        )
 
         data = state.to_dict()
         self.assertIn("current_location", data)
@@ -103,7 +107,19 @@ class TestGameState(unittest.TestCase):
         self.assertIsNone(loaded.current_location)
         self.assertEqual(loaded.get_current_location().city, "X")
 
+    def test_save_name_serialization(self) -> None:
+        """save_name should be properly serialized and deserialized."""
+        state = GameState(
+            starting_location=Location(city="Moraga", region="CA", country="US"),
+            save_name="moraga-1219",
+        )
+
+        data = state.to_dict()
+        self.assertEqual(data["save_name"], "moraga-1219")
+
+        loaded = GameState.from_dict(data)
+        self.assertEqual(loaded.save_name, "moraga-1219")
+
 
 if __name__ == "__main__":
     unittest.main()
-

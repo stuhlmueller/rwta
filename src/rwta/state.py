@@ -29,7 +29,9 @@ class GameState:
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     # In-game time (starts at current real time)
     game_time: str = field(default_factory=lambda: datetime.now().isoformat())
-    version: int = 2  # Bumped for current_location migration
+    version: int = 3  # Bumped for save_name
+    # Name for auto-saves (derived from location on first save)
+    save_name: str | None = None
 
     def get_current_location(self) -> Location:
         """Get the player's current location (falls back to starting if not set)."""
@@ -144,37 +146,31 @@ class GameState:
         }
         if self.current_location is not None:
             result["current_location"] = asdict(self.current_location)
+        if self.save_name is not None:
+            result["save_name"] = self.save_name
         return result
+
+    @classmethod
+    def _parse_float(cls, value: object) -> float | None:
+        """Parse a value to float, returning None on failure."""
+        if value is None:
+            return None
+        try:
+            return float(str(value))
+        except ValueError:
+            return None
 
     @classmethod
     def _parse_location(cls, loc_data: dict[str, object]) -> Location:
         """Parse a location dictionary into a Location object."""
         address_val = loc_data.get("address")
-        address = str(address_val) if address_val is not None else None
-
-        latitude: float | None = None
-        lat_val = loc_data.get("latitude")
-        if lat_val is not None:
-            try:
-                latitude = float(str(lat_val))
-            except ValueError:
-                pass
-
-        longitude: float | None = None
-        lon_val = loc_data.get("longitude")
-        if lon_val is not None:
-            try:
-                longitude = float(str(lon_val))
-            except ValueError:
-                pass
-
         return Location(
             city=str(loc_data.get("city") or ""),
             region=str(loc_data.get("region") or ""),
             country=str(loc_data.get("country") or ""),
-            address=address,
-            latitude=latitude,
-            longitude=longitude,
+            address=str(address_val) if address_val is not None else None,
+            latitude=cls._parse_float(loc_data.get("latitude")),
+            longitude=cls._parse_float(loc_data.get("longitude")),
         )
 
     @classmethod
@@ -215,6 +211,10 @@ class GameState:
         if game_time is None:
             game_time = datetime.now().isoformat()
 
+        # Parse save_name if present (migration: old saves won't have it)
+        save_name_data = data.get("save_name")
+        save_name = str(save_name_data) if save_name_data is not None else None
+
         return cls(
             starting_location=starting_location,
             current_location=current_location,
@@ -222,7 +222,8 @@ class GameState:
             created_at=str(data.get("created_at", "")),
             updated_at=str(data.get("updated_at", "")),
             game_time=str(game_time),
-            version=2,  # Upgrade to current version
+            version=3,  # Upgrade to current version
+            save_name=save_name,
         )
 
 
@@ -233,25 +234,41 @@ def get_saves_dir() -> Path:
     return saves_dir
 
 
+def _generate_save_name(state: GameState) -> str:
+    """Generate a save name from the starting location."""
+    location = state.starting_location
+    # Use city name, lowercased, with timestamp for uniqueness
+    city = location.city.lower().replace(" ", "-")
+    # Sanitize
+    city = "".join(c for c in city if c.isalnum() or c == "-")
+    timestamp = datetime.now().strftime("%m%d")
+    return f"{city}-{timestamp}"
+
+
 def save_game(state: GameState, name: str | None = None) -> Path:
     """
     Save the game state to a JSON file.
 
     Args:
         state: The game state to save.
-        name: Optional save name. If not provided, uses timestamp.
+        name: Optional explicit save name. If not provided, uses auto-save name.
 
     Returns:
         Path to the saved file.
     """
     saves_dir = get_saves_dir()
 
-    if name is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = f"save_{timestamp}"
+    if name is not None:
+        # Explicit save - use provided name
+        save_name = name
+    else:
+        # Auto-save - use or generate save_name
+        if state.save_name is None:
+            state.save_name = _generate_save_name(state)
+        save_name = state.save_name
 
     # Sanitize filename
-    safe_name = "".join(c for c in name if c.isalnum() or c in "._-")
+    safe_name = "".join(c for c in save_name if c.isalnum() or c in "._-")
     filepath = saves_dir / f"{safe_name}.json"
 
     state.updated_at = datetime.now().isoformat()
@@ -275,7 +292,13 @@ def load_game(filepath: Path) -> GameState:
     with open(filepath, encoding="utf-8") as f:
         data = json.load(f)
 
-    return GameState.from_dict(data)
+    state = GameState.from_dict(data)
+
+    # If no save_name in file, derive from filename (for migration)
+    if state.save_name is None:
+        state.save_name = filepath.stem
+
+    return state
 
 
 def list_saves() -> list[tuple[Path, str, str]]:
