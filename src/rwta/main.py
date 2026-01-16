@@ -384,7 +384,7 @@ def main() -> None:
                 idx = int(user_input) - 1
                 if idx < len(current_suggestions):
                     user_input = current_suggestions[idx]
-                    print_system(f"→ {user_input}\n")
+                    print_system(f"→ {user_input}")
                 # If no suggestions available, treat as regular input
 
             # Handle commands
