@@ -10,6 +10,7 @@ from pathlib import Path
 
 from rwta.commands import CommandResult, command, get_all_commands, get_command, get_command_names
 from rwta.formatting import (
+    parse_suggestions,
     print_divider,
     print_error,
     print_header,
@@ -19,6 +20,7 @@ from rwta.formatting import (
     print_session_stats,
     print_status,
     print_success,
+    print_suggestions,
     print_system,
     print_token_usage,
     print_warning,
@@ -33,9 +35,6 @@ HISTORY_FILE = Path(__file__).parent.parent.parent / ".history"
 
 class CommandCompleter:
     """Tab completion for game commands."""
-
-    def __init__(self) -> None:
-        pass
 
     def complete(self, text: str, state: int) -> str | None:
         """Return the next possible completion for text."""
@@ -114,13 +113,7 @@ def cmd_load(state: GameState, narrator: GameNarrator, args: str) -> CommandResu
 
     new_state = _choose_save(saves, "\nEnter the number to load (or 'cancel'):")
     if new_state is not None and isinstance(new_state, GameState):
-        # Show last response
-        narrative = ""
-        if new_state.messages:
-            for msg in reversed(new_state.messages):
-                if msg.role == "assistant":
-                    narrative = msg.content
-                    break
+        narrative = new_state.get_last_assistant_message() or ""
         return CommandResult(new_state=new_state, narrative=narrative, show_status=True)
     return CommandResult()
 
@@ -289,7 +282,7 @@ def _generate_with_loading(
             loading_msg = narrator.generate_loading_message(state, action_hint)
             print_loading(loading_msg, overwrite=True)
 
-    print()  # Newline after loading messages
+    print("\n")  # Blank line after loading messages
 
     if error is not None:
         raise error from None
@@ -314,6 +307,7 @@ def main() -> None:
     narrator = GameNarrator()
     start_new = "--new" in sys.argv
     state: GameState | None = None
+    current_suggestions: list[str] = []
 
     # Choose story unless --new is specified
     if not start_new:
@@ -348,26 +342,26 @@ def main() -> None:
                 state, progress_callback=lambda: print(".", end="", flush=True)
             )
             print("\n")
-            print_narrative(opening)
+            narrative, suggestions = parse_suggestions(opening)
+            print_narrative(narrative)
             _print_status_line(state)
+            print_suggestions(suggestions)
             save_game(state)
         except KeyboardInterrupt:
             print("\n\nGame cancelled.")
             sys.exit(0)
+        current_suggestions = suggestions
     else:
         # Resuming from save
         print(f"\nLocation: {state.get_current_location()}")
         print(f"Time: {state.get_formatted_game_time()}")
 
-        if state.messages:
-            last_assistant = None
-            for msg in reversed(state.messages):
-                if msg.role == "assistant":
-                    last_assistant = msg.content
-                    break
-            if last_assistant:
-                print()
-                print_narrative(last_assistant)
+        last_assistant = state.get_last_assistant_message()
+        if last_assistant:
+            print()
+            narrative, current_suggestions = parse_suggestions(last_assistant)
+            print_narrative(narrative)
+            print_suggestions(current_suggestions)
 
     print("\nType /help for commands, or just start exploring!")
 
@@ -384,6 +378,14 @@ def main() -> None:
 
             if not user_input:
                 continue
+
+            # Check if input is a suggestion selection (1, 2, or 3)
+            if user_input in ("1", "2", "3"):
+                idx = int(user_input) - 1
+                if idx < len(current_suggestions):
+                    user_input = current_suggestions[idx]
+                    print_system(f"→ {user_input}\n")
+                # If no suggestions available, treat as regular input
 
             # Handle commands
             if user_input.startswith("/"):
@@ -421,8 +423,13 @@ def main() -> None:
             response = _generate_with_loading(
                 narrator, user_input, game_state, action_hint=user_input
             )
-            print_narrative(response)
+
+            # Parse narrative and suggestions
+            narrative, current_suggestions = parse_suggestions(response)
+
+            print_narrative(narrative)
             _print_status_line(game_state)
+            print_suggestions(current_suggestions)
             save_game(game_state)
 
         except KeyboardInterrupt:

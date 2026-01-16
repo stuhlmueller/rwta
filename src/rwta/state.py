@@ -68,6 +68,13 @@ class GameState:
         self.messages.append(Message(role=role, content=content))
         self.updated_at = datetime.now().isoformat()
 
+    def get_last_assistant_message(self) -> str | None:
+        """Get the content of the most recent assistant message, or None if none exists."""
+        for msg in reversed(self.messages):
+            if msg.role == "assistant":
+                return msg.content
+        return None
+
     def get_messages_for_api(
         self,
         token_counter: Callable[[list[dict[str, object]]], int] | None = None,

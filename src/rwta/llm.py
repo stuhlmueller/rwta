@@ -126,6 +126,17 @@ Only execute actions that are immediate and concrete. If an action would take mu
 ## Starting the Game
 If this is the first message (no conversation history), welcome the player and describe their current location vividly. Use web search if helpful to describe what's actually around them.
 
+## Suggested Actions (REQUIRED)
+At the end of EVERY response, include exactly 3 suggested actions the player could take next. Format them as:
+
+---
+1. [Brief action description]
+2. [Brief action description]
+3. [Brief action description]
+
+These should be concrete, immediate actions appropriate to the current situation. Keep each to 5-10 words.
+Examples: "Walk toward the coffee shop", "Ask the stranger for directions", "Check your pockets for money"
+
 Begin!"""
 
 
@@ -311,15 +322,7 @@ Summary:"""
 
                 # Handle location update
                 if result.location_update is not None:
-                    new_location = Location(
-                        city=result.location_update.city,
-                        region=result.location_update.region,
-                        country=result.location_update.country,
-                        address=result.location_update.address,
-                        latitude=result.location_update.latitude,
-                        longitude=result.location_update.longitude,
-                    )
-                    state.set_current_location(new_location)
+                    state.set_current_location(result.location_update.to_location())
 
                 tool_results.append(
                     {

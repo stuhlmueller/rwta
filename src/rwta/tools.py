@@ -1,10 +1,15 @@
 """Web search tool for the LLM to fetch real-world information."""
 
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
+
+if TYPE_CHECKING:
+    from rwta.location import Location
 
 import httpx
 
@@ -251,6 +256,19 @@ class LocationUpdate:
     address: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+
+    def to_location(self) -> Location:
+        """Convert to a Location object."""
+        from rwta.location import Location
+
+        return Location(
+            city=self.city,
+            region=self.region,
+            country=self.country,
+            address=self.address,
+            latitude=self.latitude,
+            longitude=self.longitude,
+        )
 
 
 @dataclass

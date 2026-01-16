@@ -6,10 +6,16 @@ import textwrap
 import time
 
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.text import Text
 
 # Shared console instance
 console = Console()
+
+
+def print_markdown(text: str) -> None:
+    """Print markdown-formatted text using rich."""
+    console.print(Markdown(text))
 
 
 def get_terminal_width() -> int:
@@ -74,9 +80,8 @@ def print_narrative(text: str, typewriter: bool = True) -> None:
         text: The narrative text to print.
         typewriter: Whether to use typewriter effect.
     """
-    wrapped = wrap_text(text)
-
     if typewriter:
+        wrapped = wrap_text(text)
         # Count lines for pre-scroll
         total_lines = wrapped.count("\n") + 2
 
@@ -95,53 +100,130 @@ def print_narrative(text: str, typewriter: bool = True) -> None:
                 print()  # Blank line between paragraphs
                 time.sleep(0.15)
     else:
-        # Render markdown styling and print
-        styled = _render_markdown_to_text(wrapped)
-        console.print(styled)
+        print_markdown(text)
 
 
 def _typewriter_paragraph(text: str, delay: float = 0.05) -> None:
-    """Print a paragraph with typewriter effect, word by word."""
+    """Print a paragraph with typewriter effect, word by word. Handles **bold** and *italic*."""
+    # ANSI codes
+    BOLD = "\033[1m"
+    ITALIC = "\033[3m"
+    RESET = "\033[0m"
+
     lines = text.split("\n")
     for line_idx, line in enumerate(lines):
-        words = line.split()
-        for i, word in enumerate(words):
-            print(word, end="", flush=True)
-            if i < len(words) - 1:
-                print(" ", end="", flush=True)
-            time.sleep(delay)
+        # Process markdown markers in the line
+        i = 0
+        in_bold = False
+        in_italic = False
+        current_word = ""
+        tokens: list[str] = []
+
+        while i < len(line):
+            # Check for ** bold marker (must check before single *)
+            if line[i : i + 2] == "**":
+                if current_word:
+                    tokens.append(current_word)
+                    current_word = ""
+                if in_bold:
+                    tokens.append(RESET + (ITALIC if in_italic else ""))
+                else:
+                    tokens.append(BOLD)
+                in_bold = not in_bold
+                i += 2
+                continue
+
+            # Check for * italic marker (single asterisk, not part of **)
+            is_single_asterisk = line[i] == "*" and (i + 1 >= len(line) or line[i + 1] != "*")
+            not_preceded_by_asterisk = i == 0 or line[i - 1] != "*"
+            if is_single_asterisk and not_preceded_by_asterisk:
+                if current_word:
+                    tokens.append(current_word)
+                    current_word = ""
+                if in_italic:
+                    tokens.append(RESET + (BOLD if in_bold else ""))
+                else:
+                    tokens.append(ITALIC)
+                in_italic = not in_italic
+                i += 1
+                continue
+
+            # Check for space (word boundary)
+            if line[i] == " ":
+                if current_word:
+                    tokens.append(current_word)
+                    current_word = ""
+                tokens.append(" ")
+            else:
+                current_word += line[i]
+            i += 1
+
+        if current_word:
+            tokens.append(current_word)
+
+        # Reset at end of line if styles still active
+        if in_bold or in_italic:
+            tokens.append(RESET)
+
+        # Print with typewriter effect
+        for token in tokens:
+            print(token, end="", flush=True)
+            # Add delay after words (not ANSI codes or spaces)
+            is_ansi_code = token in (BOLD, ITALIC, RESET) or token.startswith("\033[")
+            if not is_ansi_code and token != " ":
+                time.sleep(delay)
 
         if line_idx < len(lines) - 1:
             print()
 
 
-def _render_markdown_to_text(text: str) -> Text:
-    """Convert basic markdown to rich Text with styling."""
-    result = Text()
+def parse_suggestions(text: str) -> tuple[str, list[str]]:
+    """
+    Parse suggested actions from the end of a response.
 
-    # Process text character by character to handle markdown
-    i = 0
-    while i < len(text):
-        # Bold: **text**
-        if text[i : i + 2] == "**":
-            end = text.find("**", i + 2)
-            if end != -1:
-                result.append(text[i + 2 : end], style="bold")
-                i = end + 2
-                continue
+    Looks for the pattern:
+    ---
+    1. Action one
+    2. Action two
+    3. Action three
 
-        # Italic: *text*
-        if text[i] == "*" and (i == 0 or text[i - 1] != "*"):
-            end = text.find("*", i + 1)
-            if end != -1 and (end + 1 >= len(text) or text[end + 1] != "*"):
-                result.append(text[i + 1 : end], style="italic")
-                i = end + 1
-                continue
+    Args:
+        text: The full response text.
 
-        result.append(text[i])
-        i += 1
+    Returns:
+        Tuple of (narrative without suggestions, list of suggestions).
+    """
+    # Look for the suggestions separator
+    parts = text.rsplit("---", 1)
+    if len(parts) != 2:
+        return text.strip(), []
 
-    return result
+    narrative = parts[0].strip()
+    suggestions_text = parts[1].strip()
+
+    # Parse numbered suggestions
+    suggestions: list[str] = []
+    for line in suggestions_text.split("\n"):
+        line = line.strip()
+        # Match "1. text", "2. text", etc.
+        match = re.match(r"^\d+\.\s*(.+)$", line)
+        if match:
+            suggestions.append(match.group(1).strip())
+
+    return narrative, suggestions
+
+
+def print_suggestions(suggestions: list[str]) -> None:
+    """Print suggested actions in a nice format."""
+    if not suggestions:
+        return
+
+    console.print()
+    for i, suggestion in enumerate(suggestions, 1):
+        text = Text()
+        text.append(f"  [{i}] ", style="dim cyan")
+        text.append(suggestion, style="dim")
+        console.print(text)
 
 
 def _print_styled(message: str, style: str, prefix: str = "") -> None:

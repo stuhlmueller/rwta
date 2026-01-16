@@ -33,22 +33,15 @@ def command(name: str, description: str) -> Callable[[Callable[..., Any]], Calla
     return decorator
 
 
+@dataclass
 class CommandResult:
     """Result of executing a command."""
 
-    def __init__(
-        self,
-        new_state: GameState | None = None,
-        should_quit: bool = False,
-        narrative: str = "",
-        show_status: bool = False,
-        should_save: bool = False,
-    ) -> None:
-        self.new_state = new_state
-        self.should_quit = should_quit
-        self.narrative = narrative
-        self.show_status = show_status
-        self.should_save = should_save
+    new_state: GameState | None = None
+    should_quit: bool = False
+    narrative: str = ""
+    show_status: bool = False
+    should_save: bool = False
 
 
 def get_command(name: str) -> Command | None:
