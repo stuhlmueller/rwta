@@ -7,7 +7,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
+from rwta.config import (
+    LOCAL_TIMEZONE,
+    SUMMARIZATION_BUFFER_TOKENS,
+    TOKEN_CHAR_ESTIMATE_DIVISOR,
+)
 from rwta.location import Location
+
+
+def _now_local() -> datetime:
+    """Get current time with explicit local timezone."""
+    return datetime.now(LOCAL_TIMEZONE)
+
+
+def _now_local_iso() -> str:
+    """Get current time as ISO string with timezone."""
+    return _now_local().isoformat()
 
 
 @dataclass
@@ -25,10 +40,10 @@ class GameState:
     starting_location: Location
     current_location: Location | None = None  # None means same as starting_location
     messages: list[Message] = field(default_factory=list)
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    created_at: str = field(default_factory=_now_local_iso)
+    updated_at: str = field(default_factory=_now_local_iso)
     # In-game time (starts at current real time)
-    game_time: str = field(default_factory=lambda: datetime.now().isoformat())
+    game_time: str = field(default_factory=_now_local_iso)
     version: int = 3  # Bumped for save_name
     # Name for auto-saves (derived from location on first save)
     save_name: str | None = None
@@ -40,7 +55,7 @@ class GameState:
     def set_current_location(self, location: Location) -> None:
         """Update the player's current location."""
         self.current_location = location
-        self.updated_at = datetime.now().isoformat()
+        self.updated_at = _now_local_iso()
 
     def get_game_datetime(self) -> datetime:
         """Get the current in-game datetime."""
@@ -66,7 +81,7 @@ class GameState:
     def add_message(self, role: Literal["user", "assistant"], content: str) -> None:
         """Add a message to the conversation history."""
         self.messages.append(Message(role=role, content=content))
-        self.updated_at = datetime.now().isoformat()
+        self.updated_at = _now_local_iso()
 
     def get_last_assistant_message(self) -> str | None:
         """Get the content of the most recent assistant message, or None if none exists."""
@@ -101,11 +116,11 @@ class GameState:
             {"role": m.role, "content": m.content} for m in self.messages
         ]
 
-        # Use provided counter or fall back to estimate (~4 chars per token)
+        # Use provided counter or fall back to estimate
         def count_tokens(msgs: list[dict[str, object]]) -> int:
             if token_counter:
                 return token_counter(msgs)
-            return sum(len(str(m.get("content", ""))) for m in msgs) // 4
+            return sum(len(str(m.get("content", ""))) for m in msgs) // TOKEN_CHAR_ESTIMATE_DIVISOR
 
         if count_tokens(all_messages) <= max_tokens:
             return all_messages
@@ -119,8 +134,8 @@ class GameState:
         trimmed: list[dict[str, object]] = []
 
         # Remove old messages until we're under the limit
-        # Account for space needed by summary message (~200 tokens buffer)
-        target_tokens = max_tokens - 1000 if summarizer else max_tokens
+        # Account for space needed by summary message
+        target_tokens = max_tokens - SUMMARIZATION_BUFFER_TOKENS if summarizer else max_tokens
         while remaining and count_tokens(first_messages + remaining) > target_tokens:
             # Remove oldest pair (user + assistant) from remaining
             if len(remaining) >= 2:
@@ -215,7 +230,7 @@ class GameState:
         # Handle game_time, defaulting to now if not present (for old saves)
         game_time = data.get("game_time")
         if game_time is None:
-            game_time = datetime.now().isoformat()
+            game_time = _now_local_iso()
 
         # Parse save_name if present (migration: old saves won't have it)
         save_name_data = data.get("save_name")
@@ -247,7 +262,7 @@ def _generate_save_name(state: GameState) -> str:
     city = location.city.lower().replace(" ", "-")
     # Sanitize
     city = "".join(c for c in city if c.isalnum() or c == "-")
-    timestamp = datetime.now().strftime("%m%d")
+    timestamp = _now_local().strftime("%m%d")
     return f"{city}-{timestamp}"
 
 
@@ -277,7 +292,7 @@ def save_game(state: GameState, name: str | None = None) -> Path:
     safe_name = "".join(c for c in save_name if c.isalnum() or c in "._-")
     filepath = saves_dir / f"{safe_name}.json"
 
-    state.updated_at = datetime.now().isoformat()
+    state.updated_at = _now_local_iso()
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(state.to_dict(), f, indent=2, ensure_ascii=False)

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from rwta.config import GEOLOCATION_TIMEOUT, WEATHER_TIMEOUT
+
 
 @dataclass
 class Weather:
@@ -48,7 +50,7 @@ class Location:
         return f"{self.city}, {self.country}"
 
 
-def get_city_from_ip(timeout: float = 5.0) -> Location:
+def get_city_from_ip(timeout: float | None = None) -> Location:
     """
     Get the current city based on IP address.
 
@@ -56,11 +58,13 @@ def get_city_from_ip(timeout: float = 5.0) -> Location:
     if the API is unavailable.
 
     Args:
-        timeout: Request timeout in seconds.
+        timeout: Request timeout in seconds (default from config).
 
     Returns:
         Location object with city, region, and country (no street address).
     """
+    if timeout is None:
+        timeout = GEOLOCATION_TIMEOUT
     try:
         response = httpx.get("https://ipinfo.io/json", timeout=timeout)
         response.raise_for_status()
@@ -128,19 +132,22 @@ def prompt_for_address(city_location: Location) -> Location:
     return city_location
 
 
-def get_weather(location: Location, timeout: float = 5.0) -> Weather | None:
+def get_weather(location: Location, timeout: float | None = None) -> Weather | None:
     """
     Fetch current weather for a location using Open-Meteo API (free, no key needed).
 
     Args:
         location: Location with latitude/longitude.
-        timeout: Request timeout in seconds.
+        timeout: Request timeout in seconds (default from config).
 
     Returns:
         Weather object or None if fetch fails.
     """
     if location.latitude is None or location.longitude is None:
         return None
+
+    if timeout is None:
+        timeout = WEATHER_TIMEOUT
 
     try:
         # Open-Meteo free weather API

@@ -9,6 +9,12 @@ import time
 from pathlib import Path
 
 from rwta.commands import CommandResult, command, get_all_commands, get_command, get_command_names
+from rwta.config import (
+    CTRL_C_DOUBLE_PRESS_WINDOW_SECONDS,
+    LOADING_REFRESH_INTERVAL_SECONDS,
+    MAX_CONTEXT_TOKENS,
+    READLINE_HISTORY_LENGTH,
+)
 from rwta.formatting import (
     parse_suggestions,
     print_divider,
@@ -59,7 +65,7 @@ def setup_readline() -> None:
             pass
 
     # Set history length
-    readline.set_history_length(1000)
+    readline.set_history_length(READLINE_HISTORY_LENGTH)
 
     # Set up tab completion
     completer = CommandCompleter()
@@ -137,7 +143,7 @@ def cmd_where(state: GameState, narrator: GameNarrator, args: str) -> CommandRes
 @command("tokens", "Show token usage and context limit")
 def cmd_tokens(state: GameState, narrator: GameNarrator, args: str) -> CommandResult:
     """Show token usage information."""
-    max_tokens = 180000
+    max_tokens = MAX_CONTEXT_TOKENS
     messages: list[dict[str, object]] = [
         {"role": m.role, "content": m.content} for m in state.messages
     ]
@@ -313,9 +319,12 @@ def _generate_with_loading(
     prompt: str,
     state: GameState,
     action_hint: str | None = None,
-    refresh_interval: float = 10.0,
+    refresh_interval: float | None = None,
 ) -> str:
     """Generate a response while showing periodic loading messages."""
+    if refresh_interval is None:
+        refresh_interval = LOADING_REFRESH_INTERVAL_SECONDS
+
     result: str | None = None
     error: BaseException | None = None
 
@@ -490,7 +499,7 @@ def main() -> None:
 
         except KeyboardInterrupt:
             current_time = time.time()
-            if current_time - last_interrupt_time < 2.0:
+            if current_time - last_interrupt_time < CTRL_C_DOUBLE_PRESS_WINDOW_SECONDS:
                 _exit_game(game_state, narrator)
                 break
             last_interrupt_time = current_time

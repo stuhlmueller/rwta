@@ -3,17 +3,28 @@
 import os
 import time
 from collections.abc import Callable
+from typing import cast
 
 from anthropic import Anthropic
-from anthropic.types import ContentBlock, Message, TextBlock, ToolUseBlock
+from anthropic.types import ContentBlock, Message, MessageParam, TextBlock, ToolParam, ToolUseBlock
 
+from rwta.config import (
+    FAST_MODEL,
+    MAX_CONTEXT_TOKENS,
+    MAX_RESPONSE_TOKENS,
+    OPUS_INPUT_PRICE_PER_MILLION,
+    OPUS_OUTPUT_PRICE_PER_MILLION,
+    PRIMARY_MODEL,
+    SONNET_INPUT_PRICE_PER_MILLION,
+    SONNET_OUTPUT_PRICE_PER_MILLION,
+    WEATHER_CACHE_TTL_SECONDS,
+)
 from rwta.location import Location, Weather, get_weather
 from rwta.state import GameState
-from rwta.tools import execute_tool, get_tools
+from rwta.tools import ToolDefinition, execute_tool, get_tools
 
 # Weather cache: stores (location_key, timestamp, weather) tuples
 _weather_cache: dict[str, tuple[float, Weather | None]] = {}
-WEATHER_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 
 def _get_location_cache_key(location: Location) -> str:
@@ -140,14 +151,18 @@ Examples: "Walk toward the coffee shop", "Ask the stranger for directions", "Che
 Begin!"""
 
 
+def _to_message_params(messages: list[dict[str, object]]) -> list[MessageParam]:
+    """Convert message dicts to MessageParam for the Anthropic API."""
+    return cast(list[MessageParam], messages)
+
+
+def _to_tool_params(tools: list[ToolDefinition]) -> list[ToolParam]:
+    """Convert tool definitions to ToolParam for the Anthropic API."""
+    return cast(list[ToolParam], tools)
+
+
 class GameNarrator:
     """Handles LLM interactions for the text adventure."""
-
-    # Pricing per million tokens (as of 2025)
-    OPUS_INPUT_PRICE = 15.0
-    OPUS_OUTPUT_PRICE = 75.0
-    SONNET_INPUT_PRICE = 3.0
-    SONNET_OUTPUT_PRICE = 15.0
 
     def __init__(self, api_key: str | None = None):
         """
@@ -157,7 +172,7 @@ class GameNarrator:
             api_key: Anthropic API key. If not provided, uses ANTHROPIC_API_KEY env var.
         """
         self.client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
-        self.model = "claude-opus-4-5"
+        self.model = PRIMARY_MODEL
 
         # Token usage tracking
         self.opus_input_tokens = 0
@@ -174,7 +189,7 @@ class GameNarrator:
         response = self.client.messages.count_tokens(
             model=self.model,
             system=system,
-            messages=messages,  # type: ignore[arg-type]
+            messages=_to_message_params(messages),
         )
         return response.input_tokens
 
@@ -219,9 +234,9 @@ Be concise and factual.
 Summary:"""
 
         response = self.client.messages.create(
-            model="claude-sonnet-4-5",
+            model=FAST_MODEL,
             max_tokens=150,
-            messages=[{"role": "user", "content": prompt}],
+            messages=_to_message_params([{"role": "user", "content": prompt}]),
         )
         self._track_sonnet_usage(response)
 
@@ -253,17 +268,17 @@ Summary:"""
         # Get messages, trimming if needed to fit context
         messages = state.get_messages_for_api(
             token_counter=lambda msgs: self.count_tokens(msgs, system),
-            max_tokens=180000,  # Leave room for response
+            max_tokens=MAX_CONTEXT_TOKENS,
             summarizer=self._summarize_messages,
         )
 
         # Initial API call
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=MAX_RESPONSE_TOKENS,
             system=system,
-            tools=get_tools(),  # type: ignore[arg-type]
-            messages=messages,  # type: ignore[arg-type]
+            tools=_to_tool_params(get_tools()),
+            messages=_to_message_params(messages),
         )
         self._track_opus_usage(response)
 
@@ -343,10 +358,10 @@ Summary:"""
             system = get_system_prompt(state)
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,
+                max_tokens=MAX_RESPONSE_TOKENS,
                 system=system,
-                tools=get_tools(),  # type: ignore[arg-type]
-                messages=new_messages,  # type: ignore[arg-type]
+                tools=_to_tool_params(get_tools()),
+                messages=_to_message_params(new_messages),
             )
             self._track_opus_usage(response)
             messages = new_messages
@@ -447,9 +462,9 @@ Be creative and atmospheric. No quotes, just the message. End with "..."
 Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The world comes into focus..." """
 
         response = self.client.messages.create(
-            model="claude-sonnet-4-5",  # Use Sonnet for quality
+            model=FAST_MODEL,
             max_tokens=30,
-            messages=[{"role": "user", "content": prompt}],
+            messages=_to_message_params([{"role": "user", "content": prompt}]),
         )
         self._track_sonnet_usage(response)
 
@@ -472,10 +487,10 @@ Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The wo
         Returns:
             Total cost in dollars.
         """
-        opus_cost = (self.opus_input_tokens / 1_000_000) * self.OPUS_INPUT_PRICE + (
+        opus_cost = (self.opus_input_tokens / 1_000_000) * OPUS_INPUT_PRICE_PER_MILLION + (
             self.opus_output_tokens / 1_000_000
-        ) * self.OPUS_OUTPUT_PRICE
-        sonnet_cost = (self.sonnet_input_tokens / 1_000_000) * self.SONNET_INPUT_PRICE + (
+        ) * OPUS_OUTPUT_PRICE_PER_MILLION
+        sonnet_cost = (self.sonnet_input_tokens / 1_000_000) * SONNET_INPUT_PRICE_PER_MILLION + (
             self.sonnet_output_tokens / 1_000_000
-        ) * self.SONNET_OUTPUT_PRICE
+        ) * SONNET_OUTPUT_PRICE_PER_MILLION
         return opus_cost + sonnet_cost
