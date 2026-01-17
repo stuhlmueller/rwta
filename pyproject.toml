@@ -1,5 +1,5 @@
 [project]
-name = "text-adventure"
+name = "rwta"
 version = "0.1.0"
 description = "A real-world text adventure powered by Claude Opus 4.5"
 readme = "README.md"
@@ -10,8 +10,8 @@ dependencies = [
     "rich>=13.0.0",
 ]
 
-[project.optional-dependencies]
-dev = ["pytest", "pytest-cov", "pyright", "ruff", "pre-commit"]
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-cov>=4.0", "pyright>=1.1", "ruff>=0.8", "pre-commit"]
 
 [project.scripts]
 rwta = "rwta.main:main"
@@ -38,6 +38,7 @@ ignore = ["E501", "SIM105"]  # Allow long lines (prompts), try/except/pass is fi
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.coverage.run]
 source = ["src/rwta"]
