@@ -1,6 +1,7 @@
 """Main entry point and game loop for the text adventure."""
 
 import atexit
+import logging
 import os
 import readline
 import sys
@@ -34,6 +35,8 @@ from rwta.formatting import (
 from rwta.llm import GameNarrator
 from rwta.location import get_city_from_ip, prompt_for_address
 from rwta.state import GameState, list_saves, load_game, save_game
+
+logger = logging.getLogger(__name__)
 
 # Set up readline history
 HISTORY_FILE = Path(__file__).parent.parent.parent / ".history"
@@ -321,7 +324,12 @@ def _generate_with_loading(
     action_hint: str | None = None,
     refresh_interval: float | None = None,
 ) -> str:
-    """Generate a response while showing periodic loading messages."""
+    """Generate a response while showing periodic loading messages.
+
+    The LLM generation runs in a background thread. A snapshot of the state is
+    taken before starting the thread so that loading-message generation on the
+    main thread never reads state that is being concurrently mutated.
+    """
     if refresh_interval is None:
         refresh_interval = LOADING_REFRESH_INTERVAL_SECONDS
 
@@ -335,6 +343,11 @@ def _generate_with_loading(
         except BaseException as e:
             error = e
 
+    # Snapshot immutable state for loading messages so the main thread
+    # doesn't read GameState while the background thread mutates it.
+    snapshot_location = state.starting_location
+    snapshot_game_time = state.game_time
+
     thread = threading.Thread(target=run_generation, daemon=True)
     thread.start()
 
@@ -344,7 +357,13 @@ def _generate_with_loading(
     while thread.is_alive():
         thread.join(timeout=refresh_interval)
         if thread.is_alive():
-            loading_msg = narrator.generate_loading_message(state, action_hint)
+            # Use snapshot to avoid reading state mid-mutation
+            loading_state = GameState(
+                starting_location=snapshot_location,
+                game_time=snapshot_game_time,
+                messages=list(state.messages),
+            )
+            loading_msg = narrator.generate_loading_message(loading_state, action_hint)
             print_loading(loading_msg, overwrite=True)
 
     print("\n")  # Blank line after loading messages
@@ -359,6 +378,13 @@ def _generate_with_loading(
 
 def main() -> None:
     """Main entry point for the text adventure game."""
+    # Configure logging: set RWTA_LOG_LEVEL=DEBUG for verbose output
+    log_level = os.getenv("RWTA_LOG_LEVEL", "WARNING").upper()
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.WARNING),
+        format="%(name)s %(levelname)s: %(message)s",
+    )
+
     setup_readline()
 
     print_header("REAL WORLD TEXT ADVENTURE")

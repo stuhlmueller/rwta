@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ from rwta.config import (
     SEARCH_TIMEOUT,
     SEARCH_USER_AGENT,
 )
+
+logger = logging.getLogger(__name__)
 
 # Search cache: stores (query_key, timestamp, results) - session-scoped
 _search_cache: dict[str, tuple[float, str]] = {}
@@ -276,9 +279,10 @@ def _parse_duckduckgo_html(html: str, max_results: int) -> list[dict[str, str]]:
     parser = _DDGParser(title_classes, snippet_classes)
     try:
         parser.feed(html)
-    except Exception:
-        # HTMLParser can fail on malformed HTML
-        pass
+    except (ValueError, AssertionError):
+        # HTMLParser can raise ValueError on malformed character refs
+        # and AssertionError on internal state errors
+        logger.debug("HTMLParser failed on malformed HTML, falling back to regex")
 
     results: list[dict[str, str]] = []
     for i in range(min(len(parser.titles), len(parser.snippets), max_results)):

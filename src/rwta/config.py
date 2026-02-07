@@ -1,10 +1,10 @@
 """Centralized configuration constants for RWTA."""
 
+import os
 from zoneinfo import ZoneInfo
 
 # --- Timezone ---
-# Use local timezone by default, but make it explicit
-LOCAL_TIMEZONE = ZoneInfo("America/Los_Angeles")  # Override per deployment if needed
+LOCAL_TIMEZONE = ZoneInfo(os.getenv("RWTA_TIMEZONE", "America/Los_Angeles"))
 
 # --- API Timeouts (seconds) ---
 GEOLOCATION_TIMEOUT = 5.0
@@ -23,15 +23,15 @@ SUMMARIZATION_BUFFER_TOKENS = 1000  # Extra space for summary message
 # Token estimation when API unavailable: ~4 characters per token
 TOKEN_CHAR_ESTIMATE_DIVISOR = 4
 
-# --- Pricing (per million tokens, as of 2025) ---
+# --- Pricing (per million tokens, last verified 2025-05) ---
 OPUS_INPUT_PRICE_PER_MILLION = 15.0
 OPUS_OUTPUT_PRICE_PER_MILLION = 75.0
 SONNET_INPUT_PRICE_PER_MILLION = 3.0
 SONNET_OUTPUT_PRICE_PER_MILLION = 15.0
 
 # --- Models ---
-PRIMARY_MODEL = "claude-opus-4-5"
-FAST_MODEL = "claude-sonnet-4-5"
+PRIMARY_MODEL = os.getenv("RWTA_PRIMARY_MODEL", "claude-opus-4-6")
+FAST_MODEL = os.getenv("RWTA_FAST_MODEL", "claude-sonnet-4-5")
 
 # --- UI Settings ---
 TYPEWRITER_DELAY_SECONDS = 0.05

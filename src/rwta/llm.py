@@ -1,5 +1,6 @@
 """Claude API integration for generating game responses."""
 
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -22,6 +23,8 @@ from rwta.config import (
 from rwta.location import Location, Weather, get_weather
 from rwta.state import GameState
 from rwta.tools import ToolDefinition, execute_tool, get_tools
+
+logger = logging.getLogger(__name__)
 
 # Weather cache: stores (location_key, timestamp, weather) tuples
 _weather_cache: dict[str, tuple[float, Weather | None]] = {}
@@ -273,6 +276,7 @@ Summary:"""
         )
 
         # Initial API call
+        logger.debug("Calling %s with %d messages", self.model, len(messages))
         response = self.client.messages.create(
             model=self.model,
             max_tokens=MAX_RESPONSE_TOKENS,
@@ -321,6 +325,7 @@ Summary:"""
             # Process each tool use
             tool_results: list[dict[str, object]] = []
             for tool_use in tool_uses:
+                logger.debug("Executing tool: %s", tool_use.name)
                 # Show progress
                 if progress_callback:
                     progress_callback()

@@ -1,6 +1,7 @@
 """Game state management with save/load functionality."""
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -13,6 +14,8 @@ from rwta.config import (
     TOKEN_CHAR_ESTIMATE_DIVISOR,
 )
 from rwta.location import Location
+
+logger = logging.getLogger(__name__)
 
 
 def _now_local() -> datetime:
@@ -116,28 +119,35 @@ class GameState:
             {"role": m.role, "content": m.content} for m in self.messages
         ]
 
-        # Use provided counter or fall back to estimate
+        # Use provided counter or fall back to character-based estimate
+        # (~4 chars per token is a rough approximation for English text)
         def count_tokens(msgs: list[dict[str, object]]) -> int:
             if token_counter:
                 return token_counter(msgs)
             return sum(len(str(m.get("content", ""))) for m in msgs) // TOKEN_CHAR_ESTIMATE_DIVISOR
 
+        # If everything fits, return as-is
         if count_tokens(all_messages) <= max_tokens:
             return all_messages
 
-        # Keep first 2 messages (game intro) and trim from middle
+        # Need at least 4 messages (2 intro + 1 pair) for trimming to make sense
         if len(all_messages) <= 4:
             return all_messages
 
+        # Strategy: keep the first 2 messages (game intro / opening narrative)
+        # and the most recent messages. Remove pairs from the middle, oldest first.
+        # If a summarizer is provided, summarize the removed messages and insert
+        # the summary after the intro to preserve context.
         first_messages = all_messages[:2]
         remaining = all_messages[2:]
         trimmed: list[dict[str, object]] = []
 
-        # Remove old messages until we're under the limit
-        # Account for space needed by summary message
+        # Reserve space for the summary message if we'll be generating one
         target_tokens = max_tokens - SUMMARIZATION_BUFFER_TOKENS if summarizer else max_tokens
+
+        # Remove oldest user+assistant pairs from the front of 'remaining'
+        # until the combined size (intro + remaining) fits within the limit
         while remaining and count_tokens(first_messages + remaining) > target_tokens:
-            # Remove oldest pair (user + assistant) from remaining
             if len(remaining) >= 2:
                 trimmed.extend(remaining[:2])
                 remaining = remaining[2:]
@@ -145,8 +155,10 @@ class GameState:
                 trimmed.extend(remaining[:1])
                 remaining = remaining[1:]
 
-        # Generate summary of trimmed messages if summarizer provided
+        # Insert a summary of the trimmed messages so the LLM retains
+        # key context (items found, people met, locations visited)
         if trimmed and summarizer:
+            logger.debug("Trimmed %d messages, generating summary", len(trimmed))
             summary = summarizer(trimmed)
             summary_msg: dict[str, object] = {
                 "role": "user",
@@ -297,6 +309,7 @@ def save_game(state: GameState, name: str | None = None) -> Path:
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(state.to_dict(), f, indent=2, ensure_ascii=False)
 
+    logger.debug("Game saved to %s (%d messages)", filepath.name, len(state.messages))
     return filepath
 
 
@@ -319,6 +332,7 @@ def load_game(filepath: Path) -> GameState:
     if state.save_name is None:
         state.save_name = filepath.stem
 
+    logger.debug("Game loaded from %s (%d messages)", filepath.name, len(state.messages))
     return state
 
 

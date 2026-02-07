@@ -1,11 +1,14 @@
 """IP-based geolocation and weather for determining player's environment."""
 
+import logging
 import readline
 from dataclasses import dataclass
 
 import httpx
 
 from rwta.config import GEOLOCATION_TIMEOUT, WEATHER_TIMEOUT
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -86,8 +89,8 @@ def get_city_from_ip(timeout: float | None = None) -> Location:
             latitude=lat,
             longitude=lon,
         )
-    except httpx.HTTPError:
-        # Return a default location if geolocation fails
+    except httpx.HTTPError as e:
+        logger.warning("Geolocation failed, using default (San Francisco): %s", e)
         return Location(
             city="San Francisco",
             region="California",
@@ -178,7 +181,8 @@ def get_weather(location: Location, timeout: float | None = None) -> Weather | N
             humidity=current.get("relative_humidity_2m", 0),
             wind_mph=current.get("wind_speed_10m", 0),
         )
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
+        logger.warning("Weather fetch failed for %s: %s", location.city, e)
         return None
 
 
