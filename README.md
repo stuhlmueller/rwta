@@ -53,6 +53,7 @@ Optional environment variables:
 | `RWTA_TIMEZONE` | `America/Los_Angeles` | IANA timezone for in-game time |
 | `RWTA_PRIMARY_MODEL` | `claude-opus-4-6` | Primary LLM model for narration |
 | `RWTA_FAST_MODEL` | `claude-sonnet-4-5` | Fast model for loading messages and summaries |
+| `RWTA_DATA_DIR` | `~/.rwta` | Directory for saves, exports, and history |
 | `RWTA_LOG_LEVEL` | `WARNING` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
 ## Usage
@@ -65,7 +66,13 @@ python -m rwta.main
 rwta
 
 # Skip the menu and start a fresh game
-python -m rwta.main --new
+rwta --new
+
+# Fast mode (Sonnet, no typewriter delay, no auto-save)
+rwta --fast
+
+# Combine flags
+rwta --fast --new
 ```
 
 ## Commands
@@ -101,6 +108,7 @@ You can also press `Ctrl-C` twice to save and quit.
 
 ## Recent Changes
 
+- **2026-02-13**: Add `--fast` mode (Sonnet, no typewriter delay, no auto-save), cap tool use loop at 10 iterations, move save/export/history to `~/.rwta/` (overridable via `RWTA_DATA_DIR`), replace DuckDuckGo HTML scraping with `duckduckgo-search` library
 - **2026-02-06**: Switch to Claude Opus 4.6, add configurable timezone/models/logging, improve test coverage (29 -> 68 tests), fix thread safety in loading messages, replace bare exception catch
 
 ## License

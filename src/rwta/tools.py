@@ -3,23 +3,20 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 from dataclasses import dataclass
-from html import unescape
-from html.parser import HTMLParser
 from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from rwta.location import Location
 
-import httpx
+from duckduckgo_search import DDGS
+from duckduckgo_search.exceptions import DuckDuckGoSearchException
 
 from rwta.config import (
     MAX_SEARCH_RESULTS,
     SEARCH_CACHE_TTL_SECONDS,
     SEARCH_TIMEOUT,
-    SEARCH_USER_AGENT,
 )
 
 logger = logging.getLogger(__name__)
@@ -151,7 +148,7 @@ def get_tools() -> list[ToolDefinition]:
 
 def search_web(query: str, max_results: int | None = None, timeout: float | None = None) -> str:
     """
-    Search the web using DuckDuckGo HTML interface.
+    Search the web using the duckduckgo-search library.
 
     Args:
         query: The search query.
@@ -172,176 +169,30 @@ def search_web(query: str, max_results: int | None = None, timeout: float | None
         return cached
 
     try:
-        headers = {"User-Agent": SEARCH_USER_AGENT}
+        with DDGS(timeout=int(timeout)) as ddgs:
+            raw_results = list(ddgs.text(query, max_results=max_results))
 
-        response = httpx.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": query},
-            headers=headers,
-            timeout=timeout,
-            follow_redirects=True,
-        )
-        response.raise_for_status()
-
-        # Parse results from HTML
-        results = _parse_duckduckgo_html(response.text, max_results)
-
-        if not results:
+        if not raw_results:
             result = f"No results found for: {query}"
             _cache_search_result(query, result)
             return result
 
         # Format results
         formatted = f"Search results for: {query}\n\n"
-        for i, result in enumerate(results, 1):
-            formatted += f"{i}. {result['title']}\n"
-            formatted += f"   {result['snippet']}\n\n"
+        for i, r in enumerate(raw_results, 1):
+            formatted += f"{i}. {r['title']}\n"
+            formatted += f"   {r['body']}\n\n"
 
         result = formatted.strip()
         _cache_search_result(query, result)
         return result
 
-    except httpx.TimeoutException:
+    except DuckDuckGoSearchException as e:
+        return f"Search failed: {e}"
+    except TimeoutError:
         return f"Search timed out after {timeout}s for query: {query}"
-    except httpx.ConnectError as e:
+    except ConnectionError as e:
         return f"Search connection failed (network issue): {e}"
-    except httpx.HTTPStatusError as e:
-        return f"Search failed with HTTP {e.response.status_code}: {e.response.reason_phrase}"
-    except httpx.HTTPError as e:
-        return f"Search request failed: {type(e).__name__}: {e}"
-
-
-def _parse_duckduckgo_html(html: str, max_results: int) -> list[dict[str, str]]:
-    """
-    Parse search results from DuckDuckGo HTML response.
-
-    Uses multiple parsing strategies for robustness against layout changes:
-    1. Primary HTML parser looking for known class names
-    2. Alternative class name patterns (DDG has changed these historically)
-    3. Fallback regex patterns
-
-    Args:
-        html: The HTML response from DuckDuckGo.
-        max_results: Maximum number of results to parse.
-
-    Returns:
-        List of dictionaries with 'title' and 'snippet' keys.
-    """
-    # Known DDG class names (current and historical)
-    title_classes = {"result__a", "result-link", "js-result-title-link"}
-    snippet_classes = {"result__snippet", "result-snippet", "js-result-snippet"}
-
-    class _DDGParser(HTMLParser):
-        def __init__(self, title_cls: set[str], snippet_cls: set[str]):
-            super().__init__()
-            self._title_classes = title_cls
-            self._snippet_classes = snippet_cls
-            self._capture: str | None = None
-            self._capture_tag: str | None = None
-            self._buf: list[str] = []
-            self.titles: list[str] = []
-            self.snippets: list[str] = []
-
-        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-            attrs_dict = dict(attrs)
-            class_attr = attrs_dict.get("class") or ""
-            classes = set(class_attr.split())
-
-            if classes & self._title_classes:  # Intersection - any match
-                self._capture = "title"
-                self._capture_tag = tag
-                self._buf = []
-            elif classes & self._snippet_classes:
-                self._capture = "snippet"
-                self._capture_tag = tag
-                self._buf = []
-
-        def handle_data(self, data: str) -> None:
-            if self._capture:
-                self._buf.append(data)
-
-        def handle_endtag(self, tag: str) -> None:
-            if not self._capture or self._capture_tag != tag:
-                return
-
-            text = unescape("".join(self._buf)).strip()
-            if text:
-                if self._capture == "title":
-                    self.titles.append(text)
-                else:
-                    self.snippets.append(text)
-
-            self._capture = None
-            self._capture_tag = None
-            self._buf = []
-
-    # Try primary parser with known class names
-    parser = _DDGParser(title_classes, snippet_classes)
-    try:
-        parser.feed(html)
-    except (ValueError, AssertionError):
-        # HTMLParser can raise ValueError on malformed character refs
-        # and AssertionError on internal state errors
-        logger.debug("HTMLParser failed on malformed HTML, falling back to regex")
-
-    results: list[dict[str, str]] = []
-    for i in range(min(len(parser.titles), len(parser.snippets), max_results)):
-        title = parser.titles[i].strip()
-        snippet = parser.snippets[i].strip()
-        if title and snippet:
-            results.append({"title": title, "snippet": snippet})
-
-    if results:
-        return results
-
-    # Fallback 1: Regex patterns for known class names
-    for title_cls in title_classes:
-        for snippet_cls in snippet_classes:
-            title_pattern = re.compile(
-                rf'class="[^"]*{re.escape(title_cls)}[^"]*"[^>]*>(.*?)</a>',
-                re.DOTALL | re.IGNORECASE,
-            )
-            snippet_pattern = re.compile(
-                rf'class="[^"]*{re.escape(snippet_cls)}[^"]*"[^>]*>(.*?)</(?:a|div|span)>',
-                re.DOTALL | re.IGNORECASE,
-            )
-
-            titles = [unescape(t).strip() for t in title_pattern.findall(html)]
-            snippets = [unescape(s).strip() for s in snippet_pattern.findall(html)]
-
-            for i in range(min(len(titles), len(snippets), max_results)):
-                title = re.sub(r"<[^>]+>", "", titles[i]).strip()
-                snippet = re.sub(r"<[^>]+>", "", snippets[i]).strip()
-                if title and snippet:
-                    results.append({"title": title, "snippet": snippet})
-
-            if results:
-                return results
-
-    # Fallback 2: Very generic pattern - look for links followed by text
-    # This catches result blocks even if class names change completely
-    generic_pattern = re.compile(
-        r'<a[^>]+href="[^"]*"[^>]*>([^<]+)</a>\s*'
-        r"(?:<[^>]+>)*\s*"
-        r"([^<]{20,200})",  # Snippet: at least 20 chars, max 200
-        re.DOTALL,
-    )
-
-    for match in generic_pattern.finditer(html):
-        title = unescape(match.group(1)).strip()
-        snippet = unescape(match.group(2)).strip()
-        # Filter out navigation links and other non-result content
-        if (
-            title
-            and snippet
-            and len(title) > 5
-            and not title.lower().startswith(("duck", "privacy", "settings", "about"))
-        ):
-            results.append({"title": title, "snippet": snippet})
-            if len(results) >= max_results:
-                break
-
-    return results
 
 
 @dataclass

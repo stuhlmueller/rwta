@@ -14,6 +14,8 @@ from pathlib import Path
 from rwta.commands import CommandResult, command, get_all_commands, get_command, get_command_names
 from rwta.config import (
     CTRL_C_DOUBLE_PRESS_WINDOW_SECONDS,
+    DATA_DIR,
+    FAST_LOADING_MESSAGE,
     LOADING_REFRESH_INTERVAL_SECONDS,
     LOCAL_TIMEZONE,
     MAX_CONTEXT_TOKENS,
@@ -47,7 +49,7 @@ class _MenuAction(enum.Enum):
 
 
 # Set up readline history
-HISTORY_FILE = Path(__file__).parent.parent.parent / ".history"
+HISTORY_FILE = DATA_DIR / ".history"
 
 
 class CommandCompleter:
@@ -68,6 +70,9 @@ class CommandCompleter:
 
 def setup_readline() -> None:
     """Configure readline for better input handling."""
+    # Ensure data directory exists
+    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+
     # Load history if it exists
     if HISTORY_FILE.exists():
         try:
@@ -215,8 +220,8 @@ def cmd_export(state: GameState, narrator: GameNarrator, args: str) -> CommandRe
     if not filename.endswith(".md"):
         filename += ".md"
 
-    exports_dir = Path(__file__).parent.parent.parent / "exports"
-    exports_dir.mkdir(exist_ok=True)
+    exports_dir = DATA_DIR / "exports"
+    exports_dir.mkdir(parents=True, exist_ok=True)
     filepath = exports_dir / filename
 
     filepath.write_text(markdown, encoding="utf-8")
@@ -232,6 +237,7 @@ def cmd_look(state: GameState, narrator: GameNarrator, args: str) -> CommandResu
         "Look around and describe my current surroundings in detail. Do not advance time.",
         state,
         action_hint="look around",
+        fast_mode=narrator.fast,
     )
     return CommandResult(narrative=response, show_status=True, should_save=True)
 
@@ -334,12 +340,16 @@ def _generate_with_loading(
     state: GameState,
     action_hint: str | None = None,
     refresh_interval: float | None = None,
+    fast_mode: bool = False,
 ) -> str:
     """Generate a response while showing periodic loading messages.
 
     The LLM generation runs in a background thread. A snapshot of the state is
     taken before starting the thread so that loading-message generation on the
     main thread never reads state that is being concurrently mutated.
+
+    In fast mode, shows a static "Thinking..." message instead of generating
+    loading messages via the LLM.
     """
     if refresh_interval is None:
         refresh_interval = LOADING_REFRESH_INTERVAL_SECONDS
@@ -354,25 +364,29 @@ def _generate_with_loading(
         except BaseException as e:
             error = e
 
-    # Snapshot entire state for loading messages so the main thread
-    # doesn't read GameState while the background thread mutates it.
-    loading_snapshot = GameState(
-        starting_location=state.get_current_location(),
-        game_time=state.game_time,
-        messages=list(state.messages),
-    )
-
     thread = threading.Thread(target=run_generation, daemon=True)
     thread.start()
 
-    loading_msg = narrator.generate_loading_message(loading_snapshot, action_hint)
-    print_loading(loading_msg)
+    if fast_mode:
+        print_loading(FAST_LOADING_MESSAGE)
+        thread.join()
+    else:
+        # Snapshot entire state for loading messages so the main thread
+        # doesn't read GameState while the background thread mutates it.
+        loading_snapshot = GameState(
+            starting_location=state.get_current_location(),
+            game_time=state.game_time,
+            messages=list(state.messages),
+        )
 
-    while thread.is_alive():
-        thread.join(timeout=refresh_interval)
-        if thread.is_alive():
-            loading_msg = narrator.generate_loading_message(loading_snapshot, action_hint)
-            print_loading(loading_msg, overwrite=True)
+        loading_msg = narrator.generate_loading_message(loading_snapshot, action_hint)
+        print_loading(loading_msg)
+
+        while thread.is_alive():
+            thread.join(timeout=refresh_interval)
+            if thread.is_alive():
+                loading_msg = narrator.generate_loading_message(loading_snapshot, action_hint)
+                print_loading(loading_msg, overwrite=True)
 
     print("\n")  # Blank line after loading messages
 
@@ -403,7 +417,8 @@ def main() -> None:
         print("  export ANTHROPIC_API_KEY='your-api-key'")
         sys.exit(1)
 
-    narrator = GameNarrator()
+    fast_mode = "--fast" in sys.argv
+    narrator = GameNarrator(fast=fast_mode)
     start_new = "--new" in sys.argv
     state: GameState | None = None
     current_suggestions: list[str] = []
@@ -430,8 +445,11 @@ def main() -> None:
         print_divider()
 
         try:
-            loading_msg = narrator.generate_loading_message(state)
-            print(f"{loading_msg}")
+            if fast_mode:
+                print(FAST_LOADING_MESSAGE)
+            else:
+                loading_msg = narrator.generate_loading_message(state)
+                print(f"{loading_msg}")
             print("\nExploring your surroundings", end="", flush=True)
         except KeyboardInterrupt:
             print("\n\nGame cancelled.")
@@ -443,10 +461,11 @@ def main() -> None:
             )
             print("\n")
             narrative, suggestions = parse_suggestions(opening)
-            print_narrative(narrative)
+            print_narrative(narrative, typewriter=not fast_mode)
             _print_status_line(state)
             print_suggestions(suggestions)
-            save_game(state)
+            if not fast_mode:
+                save_game(state)
         except KeyboardInterrupt:
             print("\n\nGame cancelled.")
             sys.exit(0)
@@ -460,7 +479,7 @@ def main() -> None:
         if last_assistant:
             print()
             narrative, current_suggestions = parse_suggestions(last_assistant)
-            print_narrative(narrative)
+            print_narrative(narrative, typewriter=not fast_mode)
             print_suggestions(current_suggestions)
 
     print("\nType /help for commands, or just start exploring!")
@@ -506,7 +525,7 @@ def main() -> None:
 
                 if result.narrative:
                     print()
-                    print_narrative(result.narrative)
+                    print_narrative(result.narrative, typewriter=not fast_mode)
 
                 if result.show_status:
                     _print_status_line(game_state)
@@ -521,16 +540,17 @@ def main() -> None:
 
             # Generate response for regular input
             response = _generate_with_loading(
-                narrator, user_input, game_state, action_hint=user_input
+                narrator, user_input, game_state, action_hint=user_input, fast_mode=fast_mode
             )
 
             # Parse narrative and suggestions
             narrative, current_suggestions = parse_suggestions(response)
 
-            print_narrative(narrative)
+            print_narrative(narrative, typewriter=not fast_mode)
             _print_status_line(game_state)
             print_suggestions(current_suggestions)
-            save_game(game_state)
+            if not fast_mode:
+                save_game(game_state)
 
         except KeyboardInterrupt:
             current_time = time.time()

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from rwta.config import (
+    DATA_DIR,
     LOCAL_TIMEZONE,
     SUMMARIZATION_BUFFER_TOKENS,
     TOKEN_CHAR_ESTIMATE_DIVISOR,
@@ -260,8 +261,8 @@ class GameState:
 
 def get_saves_dir() -> Path:
     """Get the saves directory, creating it if necessary."""
-    saves_dir = Path(__file__).parent.parent.parent / "saves"
-    saves_dir.mkdir(exist_ok=True)
+    saves_dir = DATA_DIR / "saves"
+    saves_dir.mkdir(parents=True, exist_ok=True)
     return saves_dir
 
 

@@ -13,6 +13,7 @@ from rwta.config import (
     FAST_MODEL,
     MAX_CONTEXT_TOKENS,
     MAX_RESPONSE_TOKENS,
+    MAX_TOOL_ITERATIONS,
     OPUS_INPUT_PRICE_PER_MILLION,
     OPUS_OUTPUT_PRICE_PER_MILLION,
     PRIMARY_MODEL,
@@ -167,15 +168,17 @@ def _to_tool_params(tools: list[ToolDefinition]) -> list[ToolParam]:
 class GameNarrator:
     """Handles LLM interactions for the text adventure."""
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, fast: bool = False):
         """
         Initialize the game narrator.
 
         Args:
             api_key: Anthropic API key. If not provided, uses ANTHROPIC_API_KEY env var.
+            fast: If True, use the fast model (Sonnet) for narration.
         """
         self.client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
-        self.model = PRIMARY_MODEL
+        self.fast = fast
+        self.model = FAST_MODEL if fast else PRIMARY_MODEL
 
         # Token usage tracking
         self.opus_input_tokens = 0
@@ -316,7 +319,15 @@ Summary:"""
         Returns:
             Final text response from the model.
         """
+        iterations = 0
         while response.stop_reason == "tool_use":
+            iterations += 1
+            if iterations > MAX_TOOL_ITERATIONS:
+                logger.warning(
+                    "Tool use loop exceeded %d iterations, breaking", MAX_TOOL_ITERATIONS
+                )
+                break
+
             # Find tool use blocks
             tool_uses = [block for block in response.content if isinstance(block, ToolUseBlock)]
             if not tool_uses:
@@ -476,9 +487,12 @@ Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The wo
         return self._extract_text_response(response.content)
 
     def _track_opus_usage(self, response: Message) -> None:
-        """Track token usage from an Opus API response."""
-        self.opus_input_tokens += response.usage.input_tokens
-        self.opus_output_tokens += response.usage.output_tokens
+        """Track token usage from a primary model API response."""
+        if self.fast:
+            self._track_sonnet_usage(response)
+        else:
+            self.opus_input_tokens += response.usage.input_tokens
+            self.opus_output_tokens += response.usage.output_tokens
 
     def _track_sonnet_usage(self, response: Message) -> None:
         """Track token usage from a Sonnet API response."""

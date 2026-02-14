@@ -7,7 +7,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from rwta.tools import (  # noqa: E402
     _cache_search_result,
     _get_cached_search,
-    _parse_duckduckgo_html,
     _parse_float,
     _parse_int,
     clear_search_cache,
@@ -16,26 +15,6 @@ from rwta.tools import (  # noqa: E402
 
 
 class TestTools(unittest.TestCase):
-    def test_parse_duckduckgo_html(self) -> None:
-        html = """
-        <html>
-          <body>
-            <a class="result__a" href="https://example.com">Example Title</a>
-            <a class="result__snippet" href="https://example.com">Example snippet.</a>
-            <a class="result__a" href="https://example.org">Second</a>
-            <a class="result__snippet" href="https://example.org">Second snippet.</a>
-          </body>
-        </html>
-        """
-        results = _parse_duckduckgo_html(html, max_results=5)
-        self.assertEqual(
-            results,
-            [
-                {"title": "Example Title", "snippet": "Example snippet."},
-                {"title": "Second", "snippet": "Second snippet."},
-            ],
-        )
-
     def test_advance_time_rejects_negative(self) -> None:
         result = execute_tool("advance_time", {"minutes": -5, "reason": "oops"})
         self.assertIn("non-negative", result.message)
@@ -140,20 +119,6 @@ class TestTools(unittest.TestCase):
         result = execute_tool("advance_time", {"minutes": "invalid", "reason": "test"})
         self.assertIn("integer", result.message)
         self.assertIn("minutes", result.message)
-
-    def test_parse_duckduckgo_html_with_alternative_classes(self) -> None:
-        # Test with alternative class names that DDG has used historically
-        html = """
-        <html>
-          <body>
-            <a class="result-link" href="https://example.com">Alt Title</a>
-            <span class="result-snippet">Alt snippet text.</span>
-          </body>
-        </html>
-        """
-        results = _parse_duckduckgo_html(html, max_results=5)
-        # Should find results using alternative class names
-        self.assertGreaterEqual(len(results), 0)  # May or may not match depending on implementation
 
 
 if __name__ == "__main__":
