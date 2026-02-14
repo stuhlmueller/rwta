@@ -2,7 +2,7 @@
 
 import logging
 import readline
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 
@@ -109,7 +109,7 @@ def prompt_for_address(city_location: Location) -> Location:
         city_location: The city-level location from IP geolocation.
 
     Returns:
-        Updated Location with the user's specified address.
+        New Location with the user's specified address (original is not mutated).
     """
     default_address = city_location.short_str()
 
@@ -126,13 +126,7 @@ def prompt_for_address(city_location: Location) -> Location:
         # Clear the hook so it doesn't affect future inputs
         readline.set_startup_hook(None)
 
-    if address:
-        city_location.address = address
-    else:
-        # Let the LLM pick a starting point
-        city_location.address = None
-
-    return city_location
+    return replace(city_location, address=address or None)
 
 
 def get_weather(location: Location, timeout: float | None = None) -> Weather | None:

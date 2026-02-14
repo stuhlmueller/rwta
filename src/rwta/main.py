@@ -1,18 +1,21 @@
 """Main entry point and game loop for the text adventure."""
 
 import atexit
+import enum
 import logging
 import os
 import readline
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from rwta.commands import CommandResult, command, get_all_commands, get_command, get_command_names
 from rwta.config import (
     CTRL_C_DOUBLE_PRESS_WINDOW_SECONDS,
     LOADING_REFRESH_INTERVAL_SECONDS,
+    LOCAL_TIMEZONE,
     MAX_CONTEXT_TOKENS,
     READLINE_HISTORY_LENGTH,
 )
@@ -37,6 +40,11 @@ from rwta.location import get_city_from_ip, prompt_for_address
 from rwta.state import GameState, list_saves, load_game, save_game
 
 logger = logging.getLogger(__name__)
+
+
+class _MenuAction(enum.Enum):
+    NEW_GAME = enum.auto()
+
 
 # Set up readline history
 HISTORY_FILE = Path(__file__).parent.parent.parent / ".history"
@@ -120,10 +128,10 @@ def cmd_load(state: GameState, narrator: GameNarrator, args: str) -> CommandResu
     print("\nSaved games:")
     _print_save_list(saves)
 
-    new_state = _choose_save(saves, "\nEnter the number to load (or 'cancel'):")
-    if new_state is not None and isinstance(new_state, GameState):
-        narrative = new_state.get_last_assistant_message() or ""
-        return CommandResult(new_state=new_state, narrative=narrative, show_status=True)
+    choice = _choose_save(saves, "\nEnter the number to load (or 'cancel'):")
+    if isinstance(choice, GameState):
+        narrative = choice.get_last_assistant_message() or ""
+        return CommandResult(new_state=choice, narrative=narrative, show_status=True)
     return CommandResult()
 
 
@@ -161,9 +169,9 @@ def cmd_tokens(state: GameState, narrator: GameNarrator, args: str) -> CommandRe
     return CommandResult()
 
 
-def _sanitize_city_slug(city: str) -> str:
-    """Convert a city name to a URL-safe slug."""
-    slug = city.lower().replace(" ", "-")
+def _sanitize_slug(name: str) -> str:
+    """Convert a name to a URL-safe slug (lowercase, alphanumeric + hyphens)."""
+    slug = name.lower().replace(" ", "-")
     return "".join(c for c in slug if c.isalnum() or c == "-")
 
 
@@ -177,8 +185,6 @@ def _strip_suggestions(content: str) -> str:
 @command("export", "Export story as markdown")
 def cmd_export(state: GameState, narrator: GameNarrator, args: str) -> CommandResult:
     """Export the entire story as a markdown file."""
-    from datetime import datetime
-
     if not state.messages:
         print_error("No story to export yet.")
         return CommandResult()
@@ -203,8 +209,8 @@ def cmd_export(state: GameState, narrator: GameNarrator, args: str) -> CommandRe
 
     markdown = "\n".join(lines)
 
-    city_slug = _sanitize_city_slug(location.city)
-    timestamp = datetime.now().strftime("%Y%m%d")
+    city_slug = _sanitize_slug(location.city)
+    timestamp = datetime.now(LOCAL_TIMEZONE).strftime("%Y%m%d")
     filename = args.strip() if args.strip() else f"{city_slug}-{timestamp}.md"
     if not filename.endswith(".md"):
         filename += ".md"
@@ -248,8 +254,13 @@ def _print_save_list(saves: list[tuple[Path, str, str]], offset: int = 0) -> Non
 
 def _choose_save(
     saves: list[tuple[Path, str, str]], prompt: str, allow_new: bool = False
-) -> GameState | None | str:
-    """Let user choose from a list of saves."""
+) -> GameState | _MenuAction | None:
+    """Let user choose from a list of saves.
+
+    Returns:
+        GameState if a save was loaded, _MenuAction.NEW_GAME if user chose new,
+        or None if cancelled.
+    """
     print(prompt)
     print("> ", end="", flush=True)
 
@@ -259,7 +270,7 @@ def _choose_save(
             return None
 
         if allow_new and choice.lower() in ("n", "new"):
-            return "new"
+            return _MenuAction.NEW_GAME
 
         idx = int(choice) - 1
         if 0 <= idx < len(saves):
@@ -280,12 +291,12 @@ def _choose_save(
         return None
 
 
-def _choose_story() -> GameState | None | str:
+def _choose_story() -> GameState | _MenuAction | None:
     """Show startup menu to choose an existing story or start new."""
     saves = list_saves()
 
     if not saves:
-        return "new"
+        return _MenuAction.NEW_GAME
 
     print("\nStories:")
     _print_save_list(saves)
@@ -343,27 +354,24 @@ def _generate_with_loading(
         except BaseException as e:
             error = e
 
-    # Snapshot immutable state for loading messages so the main thread
+    # Snapshot entire state for loading messages so the main thread
     # doesn't read GameState while the background thread mutates it.
-    snapshot_location = state.starting_location
-    snapshot_game_time = state.game_time
+    loading_snapshot = GameState(
+        starting_location=state.get_current_location(),
+        game_time=state.game_time,
+        messages=list(state.messages),
+    )
 
     thread = threading.Thread(target=run_generation, daemon=True)
     thread.start()
 
-    loading_msg = narrator.generate_loading_message(state, action_hint)
+    loading_msg = narrator.generate_loading_message(loading_snapshot, action_hint)
     print_loading(loading_msg)
 
     while thread.is_alive():
         thread.join(timeout=refresh_interval)
         if thread.is_alive():
-            # Use snapshot to avoid reading state mid-mutation
-            loading_state = GameState(
-                starting_location=snapshot_location,
-                game_time=snapshot_game_time,
-                messages=list(state.messages),
-            )
-            loading_msg = narrator.generate_loading_message(loading_state, action_hint)
+            loading_msg = narrator.generate_loading_message(loading_snapshot, action_hint)
             print_loading(loading_msg, overwrite=True)
 
     print("\n")  # Blank line after loading messages
@@ -408,6 +416,7 @@ def main() -> None:
             sys.exit(0)
         elif isinstance(choice, GameState):
             state = choice
+        # else: _MenuAction.NEW_GAME → fall through to new game setup
 
     # If no save loaded, start new game
     if state is None:

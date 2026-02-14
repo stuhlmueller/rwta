@@ -283,7 +283,7 @@ def print_status(location: str, time_str: str) -> None:
 def print_loading(message: str, overwrite: bool = False) -> None:
     """Print a loading message."""
     if overwrite:
-        print(f"\r\033[2m{message:<60}\033[0m", end="", flush=True)
+        print(f"\r\033[2K\033[2m{message}\033[0m", end="", flush=True)
     else:
         print(f"\n\033[2m{message}\033[0m", end="", flush=True)
 

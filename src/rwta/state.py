@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
@@ -70,8 +70,6 @@ class GameState:
 
     def advance_time_minutes(self, minutes: int) -> None:
         """Advance the in-game time by the specified number of minutes."""
-        from datetime import timedelta
-
         current = self.get_game_datetime()
         new_time = current + timedelta(minutes=minutes)
         self.game_time = new_time.isoformat()

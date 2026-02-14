@@ -428,7 +428,7 @@ Summary:"""
         Returns:
             A short, fun message to show while loading.
         """
-        location = state.starting_location
+        location = state.get_current_location()
         hour = state.get_game_datetime().hour
 
         # Time-based context
