@@ -33,10 +33,18 @@ TOKEN_CHAR_ESTIMATE_DIVISOR = 4
 # --- Pricing (per million tokens, verified 2026-04 for Claude 4.7 family) ---
 # Opus 4.7: $5 input / $25 output (per platform.claude.com)
 # Sonnet 4.6: $3 input / $15 output
+# Prompt caching: cache writes are 1.25x base input, cache reads are 0.1x.
 OPUS_INPUT_PRICE_PER_MILLION = 5.0
 OPUS_OUTPUT_PRICE_PER_MILLION = 25.0
 SONNET_INPUT_PRICE_PER_MILLION = 3.0
 SONNET_OUTPUT_PRICE_PER_MILLION = 15.0
+CACHE_WRITE_MULTIPLIER = 1.25
+CACHE_READ_MULTIPLIER = 0.10
+
+# --- Anthropic client ---
+# SDK retries with exponential backoff on transient errors (5xx, 408, 429,
+# connection issues). Default is 2; bump for a more resilient game session.
+ANTHROPIC_MAX_RETRIES = 4
 
 # --- Models ---
 PRIMARY_MODEL = os.getenv("RWTA_PRIMARY_MODEL", "claude-opus-4-7")

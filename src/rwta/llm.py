@@ -7,9 +7,20 @@ from collections.abc import Callable
 from typing import cast
 
 from anthropic import Anthropic
-from anthropic.types import ContentBlock, Message, MessageParam, TextBlock, ToolParam, ToolUseBlock
+from anthropic.types import (
+    ContentBlock,
+    Message,
+    MessageParam,
+    TextBlock,
+    TextBlockParam,
+    ToolParam,
+    ToolUseBlock,
+)
 
 from rwta.config import (
+    ANTHROPIC_MAX_RETRIES,
+    CACHE_READ_MULTIPLIER,
+    CACHE_WRITE_MULTIPLIER,
     FAST_MODEL,
     MAX_CONTEXT_TOKENS,
     MAX_RESPONSE_TOKENS,
@@ -59,29 +70,12 @@ def get_cached_weather(location: Location) -> Weather | None:
     return weather
 
 
-def get_system_prompt(state: GameState) -> str:
-    """
-    Generate the system prompt for the game.
+# --- System prompt (split into static + dynamic for prompt caching) ---
 
-    Args:
-        state: Current game state.
-
-    Returns:
-        System prompt string.
-    """
-    location = state.get_current_location()
-    game_time = state.get_formatted_game_time()
-
-    # Fetch current weather (with caching)
-    weather = get_cached_weather(location)
-    weather_str = str(weather) if weather else "Weather unknown"
-
-    return f"""You are the narrator of a text adventure game set in the REAL WORLD. The player exists in the actual, present-day world and can explore real locations, interact with real businesses, and encounter real-world events.
-
-## Setting
-- The player is currently in: {location}
-- Current in-game date and time: {game_time}
-- Current weather: {weather_str}
+# Static portion: rules, role, formatting requirements. Identical across turns,
+# so it's a great prefix to cache. With Anthropic prompt caching, this prefix
+# is read at 10% of the base input cost on subsequent turns.
+_STATIC_SYSTEM_PROMPT = """You are the narrator of a text adventure game set in the REAL WORLD. The player exists in the actual, present-day world and can explore real locations, interact with real businesses, and encounter real-world events.
 
 ## Your Role
 You are an immersive narrator who describes the world around the player. You should:
@@ -155,6 +149,50 @@ Examples: "Walk toward the coffee shop", "Ask the stranger for directions", "Che
 Begin!"""
 
 
+def _dynamic_system_prompt(state: GameState) -> str:
+    """Per-turn variable portion of the system prompt (location/time/weather)."""
+    location = state.get_current_location()
+    game_time = state.get_formatted_game_time()
+    weather = get_cached_weather(location)
+    weather_str = str(weather) if weather else "Weather unknown"
+
+    return f"""## Setting
+- The player is currently in: {location}
+- Current in-game date and time: {game_time}
+- Current weather: {weather_str}"""
+
+
+def get_system_prompt(state: GameState) -> str:
+    """
+    Return the full system prompt as a string (static + dynamic).
+
+    This is what we'd send to the API as `system=` if we weren't using prompt
+    caching. It's still useful for `count_tokens` and any human-readable inspection.
+    """
+    return f"{_STATIC_SYSTEM_PROMPT}\n\n{_dynamic_system_prompt(state)}"
+
+
+def _system_blocks(state: GameState) -> list[TextBlockParam]:
+    """
+    Build the system prompt as a list of cacheable text blocks.
+
+    The static block is marked with cache_control so Anthropic caches the
+    `tools + static system` prefix. Subsequent turns within ~5 minutes of
+    each other read those cached tokens at 10% of the input cost.
+    """
+    return cast(
+        list[TextBlockParam],
+        [
+            {
+                "type": "text",
+                "text": _STATIC_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"type": "text", "text": _dynamic_system_prompt(state)},
+        ],
+    )
+
+
 def _to_message_params(messages: list[dict[str, object]]) -> list[MessageParam]:
     """Convert message dicts to MessageParam for the Anthropic API."""
     return cast(list[MessageParam], messages)
@@ -176,15 +214,23 @@ class GameNarrator:
             api_key: Anthropic API key. If not provided, uses ANTHROPIC_API_KEY env var.
             fast: If True, use the fast model (Sonnet) for narration.
         """
-        self.client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
+        self.client = Anthropic(
+            api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
+            max_retries=ANTHROPIC_MAX_RETRIES,
+        )
         self.fast = fast
         self.model = FAST_MODEL if fast else PRIMARY_MODEL
 
-        # Token usage tracking
+        # Token usage tracking. Cache fields track tokens that hit Anthropic's
+        # prompt cache vs. tokens that wrote to it (priced differently).
         self.opus_input_tokens = 0
         self.opus_output_tokens = 0
+        self.opus_cache_creation_tokens = 0
+        self.opus_cache_read_tokens = 0
         self.sonnet_input_tokens = 0
         self.sonnet_output_tokens = 0
+        self.sonnet_cache_creation_tokens = 0
+        self.sonnet_cache_read_tokens = 0
 
     def count_tokens(
         self,
@@ -248,6 +294,18 @@ Summary:"""
 
         return self._extract_text_response(response.content)
 
+    def _create_message(
+        self, system_blocks: list[TextBlockParam], messages: list[dict[str, object]]
+    ) -> Message:
+        """Make a primary-model API call with caching enabled and tools attached."""
+        return self.client.messages.create(
+            model=self.model,
+            max_tokens=MAX_RESPONSE_TOKENS,
+            system=system_blocks,
+            tools=_to_tool_params(get_tools()),
+            messages=_to_message_params(messages),
+        )
+
     def generate_response(
         self,
         user_input: str,
@@ -268,29 +326,23 @@ Summary:"""
         # Add user message to state
         state.add_message("user", user_input)
 
-        # Get system prompt
-        system = get_system_prompt(state)
+        # Get system prompt (string form for token counting/trimming)
+        system_str = get_system_prompt(state)
 
         # Get messages, trimming if needed to fit context
         messages = state.get_messages_for_api(
-            token_counter=lambda msgs: self.count_tokens(msgs, system),
+            token_counter=lambda msgs: self.count_tokens(msgs, system_str),
             max_tokens=MAX_CONTEXT_TOKENS,
             summarizer=self._summarize_messages,
         )
 
-        # Initial API call
+        # Initial API call (with prompt caching on the static system block)
         logger.debug("Calling %s with %d messages", self.model, len(messages))
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=MAX_RESPONSE_TOKENS,
-            system=system,
-            tools=_to_tool_params(get_tools()),
-            messages=_to_message_params(messages),
-        )
+        response = self._create_message(_system_blocks(state), messages)
         self._track_opus_usage(response)
 
         # Handle tool use loop
-        final_response = self._handle_tool_use(response, messages, system, state, progress_callback)
+        final_response = self._handle_tool_use(response, messages, state, progress_callback)
 
         # Add assistant response to state (only if non-empty)
         if final_response.strip():
@@ -302,7 +354,6 @@ Summary:"""
         self,
         response: Message,
         messages: list[dict[str, object]],
-        system: str,
         state: GameState,
         progress_callback: Callable[[], None] | None = None,
     ) -> str:
@@ -312,7 +363,6 @@ Summary:"""
         Args:
             response: Initial API response.
             messages: Conversation messages.
-            system: System prompt.
             state: Game state (for time advancement).
             progress_callback: Optional callback to show progress.
 
@@ -370,15 +420,9 @@ Summary:"""
                 {"role": "user", "content": tool_results},
             ]
 
-            # Make next API call with updated system prompt (time may have changed)
-            system = get_system_prompt(state)
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=MAX_RESPONSE_TOKENS,
-                system=system,
-                tools=_to_tool_params(get_tools()),
-                messages=_to_message_params(new_messages),
-            )
+            # Make next API call. The dynamic system block may differ (time
+            # advanced, location changed) but the cached static prefix is reused.
+            response = self._create_message(_system_blocks(state), new_messages)
             self._track_opus_usage(response)
             messages = new_messages
 
@@ -490,26 +534,60 @@ Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The wo
         """Track token usage from a primary model API response."""
         if self.fast:
             self._track_sonnet_usage(response)
-        else:
-            self.opus_input_tokens += response.usage.input_tokens
-            self.opus_output_tokens += response.usage.output_tokens
+            return
+        usage = response.usage
+        self.opus_input_tokens += usage.input_tokens
+        self.opus_output_tokens += usage.output_tokens
+        self.opus_cache_creation_tokens += getattr(usage, "cache_creation_input_tokens", 0) or 0
+        self.opus_cache_read_tokens += getattr(usage, "cache_read_input_tokens", 0) or 0
 
     def _track_sonnet_usage(self, response: Message) -> None:
         """Track token usage from a Sonnet API response."""
-        self.sonnet_input_tokens += response.usage.input_tokens
-        self.sonnet_output_tokens += response.usage.output_tokens
+        usage = response.usage
+        self.sonnet_input_tokens += usage.input_tokens
+        self.sonnet_output_tokens += usage.output_tokens
+        self.sonnet_cache_creation_tokens += getattr(usage, "cache_creation_input_tokens", 0) or 0
+        self.sonnet_cache_read_tokens += getattr(usage, "cache_read_input_tokens", 0) or 0
+
+    @staticmethod
+    def _model_cost(
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_tokens: int,
+        cache_read_tokens: int,
+        input_price: float,
+        output_price: float,
+    ) -> float:
+        """Compute spend for one model tier given input/output and cache tokens."""
+        return (
+            (input_tokens / 1_000_000) * input_price
+            + (output_tokens / 1_000_000) * output_price
+            + (cache_creation_tokens / 1_000_000) * input_price * CACHE_WRITE_MULTIPLIER
+            + (cache_read_tokens / 1_000_000) * input_price * CACHE_READ_MULTIPLIER
+        )
 
     def get_session_cost(self) -> float:
-        """
-        Calculate the total cost of the session in USD.
-
-        Returns:
-            Total cost in dollars.
-        """
-        opus_cost = (self.opus_input_tokens / 1_000_000) * OPUS_INPUT_PRICE_PER_MILLION + (
-            self.opus_output_tokens / 1_000_000
-        ) * OPUS_OUTPUT_PRICE_PER_MILLION
-        sonnet_cost = (self.sonnet_input_tokens / 1_000_000) * SONNET_INPUT_PRICE_PER_MILLION + (
-            self.sonnet_output_tokens / 1_000_000
-        ) * SONNET_OUTPUT_PRICE_PER_MILLION
+        """Calculate the total cost of the session in USD (incl. cache pricing)."""
+        opus_cost = self._model_cost(
+            self.opus_input_tokens,
+            self.opus_output_tokens,
+            self.opus_cache_creation_tokens,
+            self.opus_cache_read_tokens,
+            OPUS_INPUT_PRICE_PER_MILLION,
+            OPUS_OUTPUT_PRICE_PER_MILLION,
+        )
+        sonnet_cost = self._model_cost(
+            self.sonnet_input_tokens,
+            self.sonnet_output_tokens,
+            self.sonnet_cache_creation_tokens,
+            self.sonnet_cache_read_tokens,
+            SONNET_INPUT_PRICE_PER_MILLION,
+            SONNET_OUTPUT_PRICE_PER_MILLION,
+        )
         return opus_cost + sonnet_cost
+
+    def get_cache_stats(self) -> tuple[int, int]:
+        """Return (cache_creation_tokens, cache_read_tokens) summed across models."""
+        creation = self.opus_cache_creation_tokens + self.sonnet_cache_creation_tokens
+        read = self.opus_cache_read_tokens + self.sonnet_cache_read_tokens
+        return creation, read

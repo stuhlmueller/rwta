@@ -92,6 +92,27 @@ class GameState:
                 return msg.content
         return None
 
+    def pop_last_exchange(self) -> str | None:
+        """
+        Remove the most recent user/assistant exchange and return the user input.
+
+        Used by ``/regenerate`` to re-roll the last response and by error
+        handlers that need to roll back a partially-completed turn.
+
+        Returns:
+            The text of the popped user message, or ``None`` if there is no
+            user message to pop.
+        """
+        # Drop a trailing assistant message if present.
+        if self.messages and self.messages[-1].role == "assistant":
+            self.messages.pop()
+        # Then drop a trailing user message and return its content.
+        if self.messages and self.messages[-1].role == "user":
+            user_msg = self.messages.pop()
+            self.updated_at = _now_local_iso()
+            return user_msg.content
+        return None
+
     def get_messages_for_api(
         self,
         token_counter: Callable[[list[dict[str, object]]], int] | None = None,
@@ -359,3 +380,35 @@ def list_saves() -> list[tuple[Path, str, str]]:
     saves.sort(key=lambda x: x[2], reverse=True)
 
     return saves
+
+
+def find_save_by_name(name: str) -> Path | None:
+    """
+    Find a save file by its name (with or without ``.json`` suffix).
+
+    Always returns the path with the on-disk filename casing (matters on
+    case-insensitive filesystems like macOS APFS). Performs an exact match
+    first, then a case-insensitive fallback. Returns ``None`` if no save
+    matches.
+    """
+    saves_dir = get_saves_dir()
+    stem = name[:-5] if name.endswith(".json") else name
+
+    # Iterate the directory once and pick the best match. We do this rather
+    # than a direct ``Path.exists()`` check because case-insensitive
+    # filesystems would happily report ``GAMMA-3.json`` as existing when the
+    # real file on disk is ``gamma-3.json``, leaving callers with a path that
+    # looks wrong in error messages and breaks string comparisons.
+    fallback: Path | None = None
+    target_lower = stem.lower()
+    for filepath in saves_dir.glob("*.json"):
+        if filepath.stem == stem:
+            return filepath
+        if fallback is None and filepath.stem.lower() == target_lower:
+            fallback = filepath
+    return fallback
+
+
+def delete_save(filepath: Path) -> None:
+    """Delete a save file. Raises ``OSError`` on failure."""
+    filepath.unlink()

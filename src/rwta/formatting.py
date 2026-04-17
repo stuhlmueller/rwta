@@ -189,15 +189,34 @@ def _tokenize_markdown_line(line: str) -> list[str]:
     return tokens
 
 
+# Trailing suggestions block: a `---` separator followed by a numbered list.
+# We anchor to end-of-string so a `---` used as a markdown horizontal rule
+# inside the narrative doesn't get misinterpreted as the suggestions delimiter.
+_SUGGESTIONS_RE = re.compile(
+    r"\n[ \t]*-{3,}[ \t]*\n"  # the --- separator on its own line
+    r"(?:[ \t]*\n)*"  # optional blank lines between separator and list
+    r"(?P<block>(?:[ \t]*\d+[.)][ \t]*[^\n]+\n?){1,9})"  # numbered list (1-9)
+    r"\s*\Z",  # only at end of text
+    re.MULTILINE,
+)
+
+_NUMBERED_LINE_RE = re.compile(r"^[ \t]*\d+[.)][ \t]*(.+?)[ \t]*$")
+
+
 def parse_suggestions(text: str) -> tuple[str, list[str]]:
     """
     Parse suggested actions from the end of a response.
 
-    Looks for the pattern:
+    Looks for the pattern at the end of the text:
     ---
     1. Action one
     2. Action two
     3. Action three
+
+    A `---` used elsewhere (e.g., as a markdown horizontal rule in the
+    narrative) will not be confused with the suggestions delimiter because
+    we require the separator to be immediately followed by a numbered list
+    that runs to the end of the text.
 
     Args:
         text: The full response text.
@@ -205,23 +224,22 @@ def parse_suggestions(text: str) -> tuple[str, list[str]]:
     Returns:
         Tuple of (narrative without suggestions, list of suggestions).
     """
-    # Look for the suggestions separator
-    parts = text.rsplit("---", 1)
-    if len(parts) != 2:
+    # Normalize: ensure we have a leading newline so the anchor matches even
+    # when --- is at the very start of the string.
+    haystack = "\n" + text.rstrip() + "\n"
+    match = _SUGGESTIONS_RE.search(haystack)
+    if not match:
         return text.strip(), []
 
-    narrative = parts[0].strip()
-    suggestions_text = parts[1].strip()
-
-    # Parse numbered suggestions
     suggestions: list[str] = []
-    for line in suggestions_text.split("\n"):
-        line = line.strip()
-        # Match "1. text", "2. text", etc.
-        match = re.match(r"^\d+\.\s*(.+)$", line)
-        if match:
-            suggestions.append(match.group(1).strip())
+    for line in match.group("block").splitlines():
+        if (m := _NUMBERED_LINE_RE.match(line)) is not None:
+            suggestions.append(m.group(1).strip())
 
+    # Cut off the original text at the start of the matched block.
+    # The match is in the prefixed haystack; subtract the leading "\n".
+    cut = max(0, match.start() - 1)
+    narrative = text[:cut].rstrip()
     return narrative, suggestions
 
 

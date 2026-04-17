@@ -1,5 +1,6 @@
 """Main entry point and game loop for the text adventure."""
 
+import argparse
 import atexit
 import enum
 import logging
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from anthropic import APIError
 
+from rwta import __version__
 from rwta.commands import CommandResult, command, get_all_commands, get_command, get_command_names
 from rwta.config import (
     CTRL_C_DOUBLE_PRESS_WINDOW_SECONDS,
@@ -41,7 +43,7 @@ from rwta.formatting import (
 )
 from rwta.llm import GameNarrator, get_system_prompt
 from rwta.location import get_city_from_ip, prompt_for_address
-from rwta.state import GameState, list_saves, load_game, save_game
+from rwta.state import GameState, delete_save, find_save_by_name, list_saves, load_game, save_game
 
 logger = logging.getLogger(__name__)
 
@@ -187,10 +189,13 @@ def _sanitize_slug(name: str) -> str:
 
 
 def _strip_suggestions(content: str) -> str:
-    """Remove the suggestions section from assistant message content."""
-    if "---" in content:
-        return content.rsplit("---", 1)[0].strip()
-    return content
+    """Remove the trailing suggestions block from an assistant message.
+
+    Delegates to :func:`parse_suggestions` so we benefit from the same
+    robustness against in-narrative ``---`` horizontal rules.
+    """
+    narrative, _ = parse_suggestions(content)
+    return narrative
 
 
 @command("export", "Export story as markdown")
@@ -253,6 +258,95 @@ def cmd_quit(state: GameState, narrator: GameNarrator, args: str) -> CommandResu
     """Save and exit the game."""
     _exit_game(state, narrator)
     return CommandResult(should_quit=True)
+
+
+@command("cost", "Show running session cost")
+def cmd_cost(state: GameState, narrator: GameNarrator, args: str) -> CommandResult:
+    """Show running session token usage and cost."""
+    cost = narrator.get_session_cost()
+    cache_creation, cache_read = narrator.get_cache_stats()
+    print_system(f"Session cost: ${cost:.4f}")
+    print_system(
+        f"Opus tokens: {narrator.opus_input_tokens:,} in / {narrator.opus_output_tokens:,} out"
+    )
+    if narrator.sonnet_input_tokens or narrator.sonnet_output_tokens:
+        print_system(
+            f"Sonnet tokens: {narrator.sonnet_input_tokens:,} in / "
+            f"{narrator.sonnet_output_tokens:,} out"
+        )
+    if cache_creation or cache_read:
+        print_system(
+            f"Prompt cache: {cache_creation:,} written, {cache_read:,} read "
+            f"(read tokens cost ~10% of base input)"
+        )
+    return CommandResult()
+
+
+@command("saves", "List saved games")
+def cmd_saves(state: GameState, narrator: GameNarrator, args: str) -> CommandResult:
+    """List all saved games."""
+    saves = list_saves()
+    if not saves:
+        print_system("No saved games.")
+        return CommandResult()
+    print_system(f"{len(saves)} saved game(s):")
+    _print_save_list(saves)
+    return CommandResult()
+
+
+@command("delete", "Delete a saved game (/delete <name>)")
+def cmd_delete(state: GameState, narrator: GameNarrator, args: str) -> CommandResult:
+    """Delete a saved game by name."""
+    name = args.strip()
+    if not name:
+        print_error("Usage: /delete <save-name>")
+        print_system("Use /saves to see available saves.")
+        return CommandResult()
+
+    filepath = find_save_by_name(name)
+    if filepath is None:
+        print_error(f"No save found matching '{name}'")
+        return CommandResult()
+
+    if filepath.stem == state.save_name:
+        print_error(
+            f"Cannot delete '{filepath.stem}' \u2014 it is the active save. "
+            "Save under a different name first or quit and restart."
+        )
+        return CommandResult()
+
+    try:
+        delete_save(filepath)
+    except OSError as e:
+        print_error(f"Failed to delete: {e}")
+        return CommandResult()
+    print_success(f"Deleted save: {filepath.stem}")
+    return CommandResult()
+
+
+@command("regenerate", "Re-roll the most recent narrator response")
+def cmd_regenerate(state: GameState, narrator: GameNarrator, args: str) -> CommandResult:
+    """Discard the last assistant message and regenerate from the last user input."""
+    last_user = state.pop_last_exchange()
+    if last_user is None:
+        print_error("Nothing to regenerate yet.")
+        return CommandResult()
+
+    print_system(f"Regenerating response to: {last_user}")
+    try:
+        response = _generate_with_loading(
+            narrator,
+            last_user,
+            state,
+            action_hint=last_user,
+            fast_mode=narrator.fast,
+        )
+    except APIError as e:
+        # Restore the original exchange so the player isn't stuck mid-state.
+        state.add_message("user", last_user)
+        print_error(f"Regeneration failed: {e}")
+        return CommandResult()
+    return CommandResult(narrative=response, show_status=True, should_save=True)
 
 
 # --- Helper Functions ---
@@ -337,6 +431,9 @@ def _exit_game(state: GameState, narrator: GameNarrator, save: bool = True) -> N
     words = _count_conversation_words(state)
     cost = narrator.get_session_cost()
     print_session_stats(words, cost)
+    cache_creation, cache_read = narrator.get_cache_stats()
+    if cache_creation or cache_read:
+        print_system(f"Prompt cache: {cache_creation:,} written / {cache_read:,} read")
     print_system("Goodbye!")
 
 
@@ -404,14 +501,53 @@ def _generate_with_loading(
     return result
 
 
-def main() -> None:
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="rwta",
+        description="Real-world text adventure powered by Claude.",
+    )
+    parser.add_argument("--version", action="version", version=f"rwta {__version__}")
+    parser.add_argument("--new", action="store_true", help="Skip the menu and start a fresh game.")
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use the fast model (Sonnet), no typewriter delay, no auto-save.",
+    )
+    parser.add_argument(
+        "--load",
+        metavar="NAME",
+        help="Load the named save and skip the menu (matches save filename stem).",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_saves",
+        help="Print all saved games and exit.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
     """Main entry point for the text adventure game."""
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+
     # Configure logging: set RWTA_LOG_LEVEL=DEBUG for verbose output
     log_level = os.getenv("RWTA_LOG_LEVEL", "WARNING").upper()
     logging.basicConfig(
         level=getattr(logging, log_level, logging.WARNING),
         format="%(name)s %(levelname)s: %(message)s",
     )
+
+    if args.list_saves:
+        saves = list_saves()
+        if not saves:
+            print("No saved games.")
+            return
+        for filepath, name, updated_at in saves:
+            print(f"{name}\t{updated_at[:19]}\t{filepath}")
+        return
 
     setup_readline()
 
@@ -423,14 +559,25 @@ def main() -> None:
         print("  export ANTHROPIC_API_KEY='your-api-key'")
         sys.exit(1)
 
-    fast_mode = "--fast" in sys.argv
-    narrator = GameNarrator(fast=fast_mode)
-    start_new = "--new" in sys.argv
+    narrator = GameNarrator(fast=args.fast)
+    fast_mode = args.fast
     state: GameState | None = None
     current_suggestions: list[str] = []
 
-    # Choose story unless --new is specified
-    if not start_new:
+    # --load <name>: jump straight to that save
+    if args.load:
+        filepath = find_save_by_name(args.load)
+        if filepath is None:
+            print_error(f"No save found matching '{args.load}'")
+            sys.exit(1)
+        try:
+            state = load_game(filepath)
+        except (OSError, ValueError, KeyError) as e:
+            print_error(f"Error loading save: {e}")
+            sys.exit(1)
+        print(f"Loaded: {filepath.stem}")
+    elif not args.new:
+        # Show story-selection menu
         choice = _choose_story()
         if choice is None:
             print_system("Goodbye!")
@@ -545,9 +692,24 @@ def main() -> None:
                 continue
 
             # Generate response for regular input
-            response = _generate_with_loading(
-                narrator, user_input, game_state, action_hint=user_input, fast_mode=fast_mode
-            )
+            try:
+                response = _generate_with_loading(
+                    narrator,
+                    user_input,
+                    game_state,
+                    action_hint=user_input,
+                    fast_mode=fast_mode,
+                )
+            except APIError as e:
+                # Don't crash the game on transient failures \u2014 surface the
+                # error and let the player retry. SDK has already retried the
+                # request internally per ANTHROPIC_MAX_RETRIES.
+                # Roll back the user message we appended in generate_response
+                # so a retry doesn't double-up the same input.
+                game_state.pop_last_exchange()
+                print_error(f"API error: {e}")
+                print_system("Try again, or use /save before retrying.")
+                continue
 
             # Parse narrative and suggestions
             narrative, current_suggestions = parse_suggestions(response)

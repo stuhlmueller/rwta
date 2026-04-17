@@ -20,6 +20,7 @@ rwta
 - **Location tracking**: Your current location updates as you move through the world, with weather that changes based on where you are
 - **Save/load**: Save your progress and continue later
 - **Action granularity**: Experience the world step-by-step - no teleporting or skipping ahead
+- **Prompt caching**: System prompt is cached on Anthropic's servers between turns, cutting input cost ~90% on cached tokens
 
 ## Installation
 
@@ -60,13 +61,19 @@ Optional environment variables:
 
 ```bash
 # Start the game (shows menu to continue a story or start new)
-python -m rwta.main
-
-# Or if installed
 rwta
+
+# Show all CLI options
+rwta --help
 
 # Skip the menu and start a fresh game
 rwta --new
+
+# Resume a specific save without going through the menu
+rwta --load oakland-0115
+
+# List all saved games (and their paths) and exit
+rwta --list
 
 # Fast mode (Sonnet, no typewriter delay, no auto-save)
 rwta --fast
@@ -75,17 +82,24 @@ rwta --fast
 rwta --fast --new
 ```
 
+After the narrator's response, you can press `1`, `2`, or `3` to pick the
+corresponding suggested action without retyping it.
+
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/save [name]` | Save your game |
-| `/load` | Load a saved game |
+| `/save [name]` | Save your game (auto-named if no name given) |
+| `/load` | Load a saved game (interactive picker) |
+| `/saves` | List saved games |
+| `/delete <name>` | Delete a saved game by name |
+| `/regenerate` | Re-roll the most recent narrator response |
 | `/time` | Show current in-game time |
 | `/where` | Show current location and time |
-| `/tokens` | Show token usage and context limit |
 | `/look` | Re-describe your current surroundings |
+| `/tokens` | Show token usage and context limit |
+| `/cost` | Show running session cost (incl. cache hits) |
 | `/export [name]` | Export story as markdown file |
 | `/quit` | Exit the game |
 
