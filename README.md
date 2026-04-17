@@ -1,6 +1,6 @@
 # Real World Text Adventure
 
-A terminal-based open-world text adventure set in the **real world**, powered by Claude Opus 4.6. Explore your actual surroundings, interact with real places and businesses, and experience current events as they happen.
+A terminal-based open-world text adventure set in the **real world**, powered by Claude Opus 4.7. Explore your actual surroundings, interact with real places and businesses, and experience current events as they happen.
 
 https://github.com/user-attachments/assets/f29b9d63-627f-4cc2-be09-98e0beb96e17
 
@@ -51,8 +51,8 @@ Optional environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RWTA_TIMEZONE` | `America/Los_Angeles` | IANA timezone for in-game time |
-| `RWTA_PRIMARY_MODEL` | `claude-opus-4-6` | Primary LLM model for narration |
-| `RWTA_FAST_MODEL` | `claude-sonnet-4-5` | Fast model for loading messages and summaries |
+| `RWTA_PRIMARY_MODEL` | `claude-opus-4-7` | Primary LLM model for narration |
+| `RWTA_FAST_MODEL` | `claude-sonnet-4-6` | Fast model for loading messages and summaries |
 | `RWTA_DATA_DIR` | `~/.rwta` | Directory for saves, exports, and history |
 | `RWTA_LOG_LEVEL` | `WARNING` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
@@ -105,11 +105,6 @@ You can also press `Ctrl-C` twice to save and quit.
 4. **Web Search**: Claude can search the web to get accurate information about real places, current events, business hours, etc.
 
 5. **Granular Actions**: You must take realistic step-by-step actions. To fly somewhere, you need to get to the airport, buy a ticket, board the plane, etc.
-
-## Recent Changes
-
-- **2026-02-13**: Add `--fast` mode (Sonnet, no typewriter delay, no auto-save), cap tool use loop at 10 iterations, move save/export/history to `~/.rwta/` (overridable via `RWTA_DATA_DIR`), replace DuckDuckGo HTML scraping with `duckduckgo-search` library
-- **2026-02-06**: Switch to Claude Opus 4.6, add configurable timezone/models/logging, improve test coverage (29 -> 68 tests), fix thread safety in loading messages, replace bare exception catch
 
 ## License
 

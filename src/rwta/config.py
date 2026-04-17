@@ -21,22 +21,26 @@ SEARCH_CACHE_TTL_SECONDS = 300  # 5 minutes (per-session cache)
 
 # --- LLM Settings ---
 MAX_TOOL_ITERATIONS = 10  # Cap tool use loop to prevent infinite loops
-MAX_CONTEXT_TOKENS = 180_000  # Leave room for response within Opus's 200k limit
+# Opus 4.7 supports a 1M context window. Keep generous headroom below that
+# for response + system prompt, and for avoiding runaway context costs.
+MAX_CONTEXT_TOKENS = 500_000
 MAX_RESPONSE_TOKENS = 4096
 SUMMARIZATION_BUFFER_TOKENS = 1000  # Extra space for summary message
 
 # Token estimation when API unavailable: ~4 characters per token
 TOKEN_CHAR_ESTIMATE_DIVISOR = 4
 
-# --- Pricing (per million tokens, last verified 2025-05) ---
-OPUS_INPUT_PRICE_PER_MILLION = 15.0
-OPUS_OUTPUT_PRICE_PER_MILLION = 75.0
+# --- Pricing (per million tokens, verified 2026-04 for Claude 4.7 family) ---
+# Opus 4.7: $5 input / $25 output (per platform.claude.com)
+# Sonnet 4.6: $3 input / $15 output
+OPUS_INPUT_PRICE_PER_MILLION = 5.0
+OPUS_OUTPUT_PRICE_PER_MILLION = 25.0
 SONNET_INPUT_PRICE_PER_MILLION = 3.0
 SONNET_OUTPUT_PRICE_PER_MILLION = 15.0
 
 # --- Models ---
-PRIMARY_MODEL = os.getenv("RWTA_PRIMARY_MODEL", "claude-opus-4-6")
-FAST_MODEL = os.getenv("RWTA_FAST_MODEL", "claude-sonnet-4-5")
+PRIMARY_MODEL = os.getenv("RWTA_PRIMARY_MODEL", "claude-opus-4-7")
+FAST_MODEL = os.getenv("RWTA_FAST_MODEL", "claude-sonnet-4-6")
 
 # --- UI Settings ---
 TYPEWRITER_DELAY_SECONDS = 0.05

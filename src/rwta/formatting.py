@@ -9,6 +9,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
 
+from rwta.config import PARAGRAPH_PAUSE_SECONDS, TYPEWRITER_DELAY_SECONDS
+
 # Shared console instance
 console = Console()
 
@@ -103,7 +105,7 @@ def print_narrative(text: str, typewriter: bool = True) -> None:
             print()  # End the paragraph
             if i < len(paragraphs) - 1:
                 print()  # Blank line between paragraphs
-                time.sleep(0.15)
+                time.sleep(PARAGRAPH_PAUSE_SECONDS)
     else:
         print_markdown(text)
 
@@ -117,7 +119,7 @@ def _is_single_asterisk(line: str, pos: int) -> bool:
     return not next_is_asterisk and not prev_is_asterisk
 
 
-def _typewriter_paragraph(text: str, delay: float = 0.05) -> None:
+def _typewriter_paragraph(text: str, delay: float = TYPEWRITER_DELAY_SECONDS) -> None:
     """Print a paragraph with typewriter effect, word by word. Handles **bold** and *italic*."""
     lines = text.split("\n")
     for line_idx, line in enumerate(lines):

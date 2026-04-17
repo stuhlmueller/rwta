@@ -11,6 +11,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from anthropic import APIError
+
 from rwta.commands import CommandResult, command, get_all_commands, get_command, get_command_names
 from rwta.config import (
     CTRL_C_DOUBLE_PRESS_WINDOW_SECONDS,
@@ -37,7 +39,7 @@ from rwta.formatting import (
     print_token_usage,
     print_warning,
 )
-from rwta.llm import GameNarrator
+from rwta.llm import GameNarrator, get_system_prompt
 from rwta.location import get_city_from_ip, prompt_for_address
 from rwta.state import GameState, list_saves, load_game, save_game
 
@@ -163,11 +165,15 @@ def cmd_tokens(state: GameState, narrator: GameNarrator, args: str) -> CommandRe
     messages: list[dict[str, object]] = [
         {"role": m.role, "content": m.content} for m in state.messages
     ]
-    system = ""
+    # Include the system prompt so the count reflects what actually goes to
+    # the API each turn (system prompt is substantial: rules + weather).
+    system = get_system_prompt(state)
     try:
         current_tokens = narrator.count_tokens(messages, system)
-    except (ValueError, TypeError, RuntimeError):
-        current_tokens = sum(len(m.content) for m in state.messages) // 4
+    except (ValueError, TypeError, RuntimeError, APIError):
+        # Fall back to a rough character-based estimate on any API issue.
+        total_chars = sum(len(m.content) for m in state.messages) + len(system)
+        current_tokens = total_chars // 4
 
     remaining = max_tokens - current_tokens
     print_token_usage(current_tokens, max_tokens, remaining)

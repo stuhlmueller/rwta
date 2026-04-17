@@ -1,7 +1,7 @@
 [project]
 name = "rwta"
 version = "0.1.0"
-description = "A real-world text adventure powered by Claude Opus 4.5"
+description = "A real-world text adventure powered by Claude Opus 4.7"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
