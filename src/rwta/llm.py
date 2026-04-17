@@ -11,8 +11,10 @@ from anthropic.types import (
     ContentBlock,
     Message,
     MessageParam,
+    RedactedThinkingBlock,
     TextBlock,
     TextBlockParam,
+    ThinkingBlock,
     ToolParam,
     ToolUseBlock,
 )
@@ -30,6 +32,8 @@ from rwta.config import (
     PRIMARY_MODEL,
     SONNET_INPUT_PRICE_PER_MILLION,
     SONNET_OUTPUT_PRICE_PER_MILLION,
+    THINKING_EFFORT,
+    THINKING_MODE,
     WEATHER_CACHE_TTL_SECONDS,
 )
 from rwta.location import Location, Weather, get_weather
@@ -294,6 +298,30 @@ Summary:"""
 
         return self._extract_text_response(response.content)
 
+    def _thinking_kwargs(self) -> dict[str, object]:
+        """
+        Return ``extra_body`` kwargs that turn on adaptive thinking.
+
+        Adaptive thinking is enabled by default on Opus 4.7 (the only mode it
+        supports) and Sonnet 4.6. We use ``display: "omitted"`` so the API
+        skips streaming thinking text — we don't surface it to the player and
+        omitting cuts time-to-first-text-token. Thinking is suppressed in
+        --fast mode where latency matters more than depth.
+
+        Both ``output_config`` and the ``display`` field on ``thinking`` are
+        newer than the installed Anthropic SDK's TypedDicts (per the docs:
+        "No SDK currently includes display in its type definitions"). We pass
+        them via ``extra_body`` so the SDK forwards them verbatim.
+        """
+        if self.fast or THINKING_MODE != "adaptive":
+            return {}
+        return {
+            "extra_body": {
+                "thinking": {"type": "adaptive", "display": "omitted"},
+                "output_config": {"effort": THINKING_EFFORT},
+            }
+        }
+
     def _create_message(
         self, system_blocks: list[TextBlockParam], messages: list[dict[str, object]]
     ) -> Message:
@@ -304,6 +332,7 @@ Summary:"""
             system=system_blocks,
             tools=_to_tool_params(get_tools()),
             messages=_to_message_params(messages),
+            **self._thinking_kwargs(),  # type: ignore[arg-type]
         )
 
     def generate_response(
@@ -430,7 +459,15 @@ Summary:"""
         return self._extract_text_response(response.content)
 
     def _content_blocks_to_list(self, content: list[ContentBlock]) -> list[dict[str, object]]:
-        """Convert content blocks to a list of dicts for the API."""
+        """
+        Convert content blocks to a list of dicts for the API.
+
+        Thinking blocks (and their encrypted ``signature``) MUST be passed back
+        in subsequent turns of a tool-use loop when extended/adaptive thinking
+        is active — otherwise the API rejects the request. ``display: "omitted"``
+        leaves the visible ``thinking`` field empty but the ``signature`` still
+        carries the encrypted full reasoning, which we round-trip unchanged.
+        """
         result: list[dict[str, object]] = []
         for block in content:
             if isinstance(block, ToolUseBlock):
@@ -444,6 +481,16 @@ Summary:"""
                 )
             elif isinstance(block, TextBlock):
                 result.append({"type": "text", "text": block.text})
+            elif isinstance(block, ThinkingBlock):
+                result.append(
+                    {
+                        "type": "thinking",
+                        "thinking": block.thinking,
+                        "signature": block.signature,
+                    }
+                )
+            elif isinstance(block, RedactedThinkingBlock):
+                result.append({"type": "redacted_thinking", "data": block.data})
         return result
 
     def _extract_text_response(self, content: list[ContentBlock]) -> str:

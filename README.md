@@ -21,6 +21,7 @@ rwta
 - **Save/load**: Save your progress and continue later
 - **Action granularity**: Experience the world step-by-step - no teleporting or skipping ahead
 - **Prompt caching**: System prompt is cached on Anthropic's servers between turns, cutting input cost ~90% on cached tokens
+- **Adaptive thinking**: Opus 4.7 thinks between tool calls for higher-quality multi-step actions; thinking is hidden from the player for snappier output
 
 ## Installation
 
@@ -54,6 +55,8 @@ Optional environment variables:
 | `RWTA_TIMEZONE` | `America/Los_Angeles` | IANA timezone for in-game time |
 | `RWTA_PRIMARY_MODEL` | `claude-opus-4-7` | Primary LLM model for narration |
 | `RWTA_FAST_MODEL` | `claude-sonnet-4-6` | Fast model for loading messages and summaries |
+| `RWTA_THINKING` | `adaptive` | Thinking mode for the primary model: `adaptive` or `off`. Opus 4.7 only supports `adaptive`. |
+| `RWTA_THINKING_EFFORT` | `medium` | Soft guide for how much to think when adaptive: `low`, `medium`, `high`, `xhigh`, `max`. |
 | `RWTA_DATA_DIR` | `~/.rwta` | Directory for saves, exports, and history |
 | `RWTA_LOG_LEVEL` | `WARNING` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 

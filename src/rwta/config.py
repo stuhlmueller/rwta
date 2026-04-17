@@ -24,7 +24,10 @@ MAX_TOOL_ITERATIONS = 10  # Cap tool use loop to prevent infinite loops
 # Opus 4.7 supports a 1M context window. Keep generous headroom below that
 # for response + system prompt, and for avoiding runaway context costs.
 MAX_CONTEXT_TOKENS = 500_000
-MAX_RESPONSE_TOKENS = 4096
+# max_tokens is a hard cap on total output INCLUDING thinking tokens. With
+# adaptive thinking enabled the model may spend several hundred to a few
+# thousand tokens reasoning before emitting visible text, so we leave room.
+MAX_RESPONSE_TOKENS = 16_000
 SUMMARIZATION_BUFFER_TOKENS = 1000  # Extra space for summary message
 
 # Token estimation when API unavailable: ~4 characters per token
@@ -49,6 +52,18 @@ ANTHROPIC_MAX_RETRIES = 4
 # --- Models ---
 PRIMARY_MODEL = os.getenv("RWTA_PRIMARY_MODEL", "claude-opus-4-7")
 FAST_MODEL = os.getenv("RWTA_FAST_MODEL", "claude-sonnet-4-6")
+
+# --- Adaptive thinking ---
+# Opus 4.7 only supports adaptive thinking (manual budget_tokens is rejected
+# with HTTP 400). Adaptive auto-enables interleaved thinking, which lets the
+# model reason between tool calls — valuable for our search/time/location
+# tool loop. Off by default would forfeit that quality, so default ON.
+# Set RWTA_THINKING=off to disable (e.g., to save output-token spend).
+THINKING_MODE = os.getenv("RWTA_THINKING", "adaptive").strip().lower()
+# Effort guidance for adaptive thinking. "high" is the SDK default and means
+# Claude almost always thinks; "low"/"medium" let it skip thinking on simple
+# turns, trading depth for latency.
+THINKING_EFFORT = os.getenv("RWTA_THINKING_EFFORT", "medium").strip().lower()
 
 # --- UI Settings ---
 TYPEWRITER_DELAY_SECONDS = 0.05
