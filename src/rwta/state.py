@@ -38,6 +38,19 @@ class Message:
 
 
 @dataclass
+class ImageHistoryEntry:
+    """A cached generated scene image for one narrator turn and style."""
+
+    id: str
+    turn_index: int
+    style_id: str
+    style_name: str
+    path: str
+    prompt: str
+    created_at: str = field(default_factory=_now_local_iso)
+
+
+@dataclass
 class GameState:
     """Complete game state."""
 
@@ -48,9 +61,13 @@ class GameState:
     updated_at: str = field(default_factory=_now_local_iso)
     # In-game time (starts at current real time)
     game_time: str = field(default_factory=_now_local_iso)
-    version: int = 3  # Bumped for save_name
+    version: int = 4  # Bumped for visual_continuity
     # Name for auto-saves (derived from location on first save)
     save_name: str | None = None
+    # Compact visual bible for scene image consistency across turns.
+    visual_continuity: str | None = None
+    # Cached generated scene images for this run, in creation order.
+    image_history: list[ImageHistoryEntry] = field(default_factory=list)
 
     def get_current_location(self) -> Location:
         """Get the player's current location (falls back to starting if not set)."""
@@ -104,13 +121,25 @@ class GameState:
             user message to pop.
         """
         # Drop a trailing assistant message if present.
+        changed = False
         if self.messages and self.messages[-1].role == "assistant":
             self.messages.pop()
+            changed = True
         # Then drop a trailing user message and return its content.
         if self.messages and self.messages[-1].role == "user":
             user_msg = self.messages.pop()
+            self.visual_continuity = None
+            self.image_history = [
+                img for img in self.image_history if img.turn_index < len(self.messages)
+            ]
             self.updated_at = _now_local_iso()
             return user_msg.content
+        if changed:
+            self.visual_continuity = None
+            self.image_history = [
+                img for img in self.image_history if img.turn_index < len(self.messages)
+            ]
+            self.updated_at = _now_local_iso()
         return None
 
     def get_messages_for_api(
@@ -202,6 +231,10 @@ class GameState:
             result["current_location"] = asdict(self.current_location)
         if self.save_name is not None:
             result["save_name"] = self.save_name
+        if self.visual_continuity:
+            result["visual_continuity"] = self.visual_continuity
+        if self.image_history:
+            result["image_history"] = [asdict(img) for img in self.image_history]
         return result
 
     @classmethod
@@ -268,6 +301,32 @@ class GameState:
         save_name_data = data.get("save_name")
         save_name = str(save_name_data) if save_name_data is not None else None
 
+        # Parse visual_continuity if present (migration: old saves won't have it)
+        visual_data = data.get("visual_continuity")
+        visual_continuity = str(visual_data) if visual_data else None
+
+        image_history_data = data.get("image_history", [])
+        image_history: list[ImageHistoryEntry] = []
+        if isinstance(image_history_data, list):
+            for item in image_history_data:
+                if not isinstance(item, dict):
+                    continue
+                entry = cast(dict[str, object], item)
+                try:
+                    image_history.append(
+                        ImageHistoryEntry(
+                            id=str(entry.get("id") or ""),
+                            turn_index=int(str(entry.get("turn_index") or 0)),
+                            style_id=str(entry.get("style_id") or "photo"),
+                            style_name=str(entry.get("style_name") or "Photo"),
+                            path=str(entry.get("path") or ""),
+                            prompt=str(entry.get("prompt") or ""),
+                            created_at=str(entry.get("created_at") or _now_local_iso()),
+                        )
+                    )
+                except ValueError:
+                    continue
+
         return cls(
             starting_location=starting_location,
             current_location=current_location,
@@ -275,8 +334,10 @@ class GameState:
             created_at=str(data.get("created_at", "")),
             updated_at=str(data.get("updated_at", "")),
             game_time=str(game_time),
-            version=3,  # Upgrade to current version
+            version=4,  # Upgrade to current version
             save_name=save_name,
+            visual_continuity=visual_continuity,
+            image_history=image_history,
         )
 
 

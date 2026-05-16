@@ -45,6 +45,23 @@ class TestThinkingKwargs(unittest.TestCase):
         self.assertEqual(self._kwargs(mode="manual"), {})
 
 
+class TestVisualContinuityHelpers(unittest.TestCase):
+    def test_clean_visual_ledger_removes_empty_bullets(self) -> None:
+        from rwta.llm import GameNarrator
+
+        raw = """
+        - Red jacket
+        -
+        •
+        * Brass compass
+        """
+
+        self.assertEqual(
+            GameNarrator._clean_visual_ledger(raw),
+            "- Red jacket\n* Brass compass",
+        )
+
+
 class TestContentBlockRoundTrip(unittest.TestCase):
     """Thinking blocks must survive _content_blocks_to_list for tool-use loops."""
 

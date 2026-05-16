@@ -52,6 +52,7 @@ ANTHROPIC_MAX_RETRIES = 4
 # --- Models ---
 PRIMARY_MODEL = os.getenv("RWTA_PRIMARY_MODEL", "claude-opus-4-7")
 FAST_MODEL = os.getenv("RWTA_FAST_MODEL", "claude-sonnet-4-6")
+FALLBACK_MODEL = os.getenv("RWTA_FALLBACK_MODEL", "gpt-5.5")
 
 # --- Adaptive thinking ---
 # Opus 4.7 only supports adaptive thinking (manual budget_tokens is rejected
@@ -64,6 +65,10 @@ THINKING_MODE = os.getenv("RWTA_THINKING", "adaptive").strip().lower()
 # Claude almost always thinks; "low"/"medium" let it skip thinking on simple
 # turns, trading depth for latency.
 THINKING_EFFORT = os.getenv("RWTA_THINKING_EFFORT", "medium").strip().lower()
+
+# --- Visual continuity for generated scene images ---
+VISUAL_CONTINUITY_MAX_CHARS = int(os.getenv("RWTA_VISUAL_CONTINUITY_MAX_CHARS", "1400"))
+VISUAL_TRANSCRIPT_MAX_CHARS = int(os.getenv("RWTA_VISUAL_TRANSCRIPT_MAX_CHARS", "9000"))
 
 # --- UI Settings ---
 TYPEWRITER_DELAY_SECONDS = 0.05

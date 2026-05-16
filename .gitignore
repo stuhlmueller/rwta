@@ -21,5 +21,12 @@ CLAUDE.md
 # Game files
 .history
 
-# Save files
+# Save/cache files
 saves/
+images/
+.rwta/
+
+# Swift build outputs
+mac/.build/
+mac/.swiftpm/
+mac/Package.resolved

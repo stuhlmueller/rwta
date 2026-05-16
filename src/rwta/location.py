@@ -98,6 +98,63 @@ def get_city_from_ip(timeout: float | None = None) -> Location:
         )
 
 
+def geocode_location(query: str, timeout: float | None = None) -> Location | None:
+    """Geocode a free-form place/address using OpenStreetMap Nominatim."""
+    if timeout is None:
+        timeout = GEOLOCATION_TIMEOUT
+    cleaned = query.strip()
+    if not cleaned:
+        return None
+
+    try:
+        response = httpx.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": cleaned, "format": "jsonv2", "limit": 1, "addressdetails": 1},
+            headers={"User-Agent": "rwta/0.1 (https://github.com/stuhlmueller/rwta)"},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        results = response.json()
+    except httpx.HTTPError as e:
+        logger.warning("Geocoding failed for %r: %s", cleaned, e)
+        return None
+
+    if not isinstance(results, list) or not results:
+        return None
+    first = results[0]
+    if not isinstance(first, dict):
+        return None
+    address = first.get("address") if isinstance(first.get("address"), dict) else {}
+    assert isinstance(address, dict)
+
+    city = str(
+        address.get("city")
+        or address.get("town")
+        or address.get("village")
+        or address.get("municipality")
+        or address.get("county")
+        or cleaned
+    )
+    region = str(address.get("state") or address.get("region") or "")
+    country = str(address.get("country") or "")
+    address_text = None if cleaned.casefold() == city.casefold() else cleaned
+    try:
+        latitude = float(str(first.get("lat")))
+        longitude = float(str(first.get("lon")))
+    except (TypeError, ValueError):
+        latitude = None
+        longitude = None
+
+    return Location(
+        city=city,
+        region=region,
+        country=country,
+        address=address_text,
+        latitude=latitude,
+        longitude=longitude,
+    )
+
+
 def prompt_for_address(city_location: Location) -> Location:
     """
     Prompt the user for a specific street address within their city.

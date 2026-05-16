@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from typing import cast
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APIError
 from anthropic.types import (
     ContentBlock,
     Message,
@@ -23,6 +23,7 @@ from rwta.config import (
     ANTHROPIC_MAX_RETRIES,
     CACHE_READ_MULTIPLIER,
     CACHE_WRITE_MULTIPLIER,
+    FALLBACK_MODEL,
     FAST_MODEL,
     MAX_CONTEXT_TOKENS,
     MAX_RESPONSE_TOKENS,
@@ -34,6 +35,8 @@ from rwta.config import (
     SONNET_OUTPUT_PRICE_PER_MILLION,
     THINKING_EFFORT,
     THINKING_MODE,
+    VISUAL_CONTINUITY_MAX_CHARS,
+    VISUAL_TRANSCRIPT_MAX_CHARS,
     WEATHER_CACHE_TTL_SECONDS,
 )
 from rwta.location import Location, Weather, get_weather
@@ -376,8 +379,155 @@ Summary:"""
         # Add assistant response to state (only if non-empty)
         if final_response.strip():
             state.add_message("assistant", final_response)
+            self.update_visual_continuity(state)
 
         return final_response
+
+    def update_visual_continuity(self, state: GameState) -> None:
+        """
+        Maintain a compact visual bible for generated images.
+
+        Image models otherwise tend to silently redesign recurring people,
+        places, clothing, vehicles, and carried items from turn to turn. This
+        ledger is intentionally short and factual; it is fed into every scene
+        image prompt and saved with the game.
+        """
+        last_assistant = state.get_last_assistant_message()
+        if not last_assistant:
+            return
+
+        last_user = self._last_user_message(state)
+        existing = state.visual_continuity or ""
+        if existing:
+            source = f"Existing visual continuity ledger:\n{existing}\n\nLatest turn:"
+            transcript = self._format_latest_exchange(last_user, last_assistant)
+        else:
+            source = "Build a visual continuity ledger from this adventure transcript:"
+            transcript = self._visual_transcript(state)
+
+        prompt = f"""You maintain the VISUAL CONTINUITY LEDGER for a real-world illustrated text adventure.
+
+Goal: keep generated scene images visually consistent across turns. Track only durable visual facts that should remain stable unless the story explicitly changes them.
+
+Include, when present:
+- recurring people: appearance, clothing, posture, distinctive features
+- recurring places: stable layout, architecture, landmarks, lighting fixtures, signage
+- items/props/vehicles/pets: exact appearance, ownership, location, condition
+- current carried or worn items
+
+Rules:
+- Do not invent new visual details.
+- Preserve exact details already established unless the latest turn explicitly changes them.
+- Remove details only when contradicted, lost, left behind, destroyed, or no longer relevant.
+- Keep it concise: at most {VISUAL_CONTINUITY_MAX_CHARS} characters.
+- Return only the ledger text, as terse bullets. If there are no durable visual facts, return an empty string.
+
+{source}
+{transcript}
+"""
+
+        try:
+            response = self.client.messages.create(
+                model=FAST_MODEL,
+                max_tokens=500,
+                messages=_to_message_params([{"role": "user", "content": prompt}]),
+            )
+        except APIError as e:
+            logger.warning("Visual continuity update failed: %s", e)
+            return
+        except (OSError, ValueError, TypeError) as e:
+            logger.warning("Visual continuity update failed: %s", e)
+            return
+
+        self._track_sonnet_usage(response)
+        ledger = self._clean_visual_ledger(self._extract_text_response(response.content))
+        if len(ledger) > VISUAL_CONTINUITY_MAX_CHARS:
+            ledger = ledger[:VISUAL_CONTINUITY_MAX_CHARS].rsplit("\n", 1)[0].strip()
+        state.visual_continuity = ledger or None
+
+    @staticmethod
+    def _clean_visual_ledger(raw: str) -> str:
+        lines = []
+        for line in raw.strip().splitlines():
+            cleaned = line.strip()
+            if cleaned in {"-", "*", "•"}:
+                continue
+            if cleaned:
+                lines.append(cleaned)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _last_user_message(state: GameState) -> str | None:
+        for msg in reversed(state.messages):
+            if msg.role == "user":
+                return msg.content
+        return None
+
+    @staticmethod
+    def _format_latest_exchange(last_user: str | None, last_assistant: str) -> str:
+        parts: list[str] = []
+        if last_user:
+            parts.append(f"Player: {last_user}")
+        parts.append(f"Narrator: {last_assistant}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _visual_transcript(state: GameState) -> str:
+        lines = [f"Current location: {state.get_current_location()}"]
+        for msg in state.messages:
+            label = "Player" if msg.role == "user" else "Narrator"
+            lines.append(f"{label}: {msg.content}")
+        transcript = "\n\n".join(lines)
+        if len(transcript) <= VISUAL_TRANSCRIPT_MAX_CHARS:
+            return transcript
+        head_chars = VISUAL_TRANSCRIPT_MAX_CHARS // 3
+        tail_chars = VISUAL_TRANSCRIPT_MAX_CHARS - head_chars
+        head = transcript[:head_chars].rsplit("\n", 1)[0]
+        tail = transcript[-tail_chars:].split("\n", 1)[-1]
+        return f"{head}\n\n[... earlier visual history omitted ...]\n\n{tail}"
+
+    def generate_response_fallback(
+        self,
+        user_input: str,
+        state: GameState,
+        model: str = FALLBACK_MODEL,
+    ) -> str:
+        """Generate a response with OpenAI when Anthropic fails.
+
+        This is deliberately no-tools: it prioritizes recovering the session
+        and producing a playable next turn over perfect location/time updates.
+        """
+        try:
+            from openai import OpenAI, OpenAIError
+        except ImportError as e:
+            raise RuntimeError("openai package not installed") from e
+
+        state.add_message("user", user_input)
+        system = get_system_prompt(state)
+        messages = state.get_messages_for_api(max_tokens=MAX_CONTEXT_TOKENS)
+        openai_messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+        for msg in messages:
+            role = str(msg.get("role", "user"))
+            content = str(msg.get("content", ""))
+            openai_messages.append({"role": role, "content": content})
+
+        try:
+            response = OpenAI().chat.completions.create(
+                model=model,
+                messages=openai_messages,  # type: ignore[arg-type]
+                max_completion_tokens=2000,
+            )
+        except OpenAIError as e:
+            state.pop_last_exchange()
+            raise RuntimeError(f"OpenAI fallback failed: {e}") from e
+
+        text = (response.choices[0].message.content or "").strip() if response.choices else ""
+        if not text:
+            state.pop_last_exchange()
+            raise RuntimeError("OpenAI fallback returned an empty response")
+        state.add_message("assistant", text)
+        self.update_visual_continuity(state)
+        return text
 
     def _handle_tool_use(
         self,

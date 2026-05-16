@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from rwta.location import Location  # noqa: E402
-from rwta.state import GameState  # noqa: E402
+from rwta.state import GameState, ImageHistoryEntry  # noqa: E402
 
 
 class TestGameState(unittest.TestCase):
@@ -119,6 +119,67 @@ class TestGameState(unittest.TestCase):
 
         loaded = GameState.from_dict(data)
         self.assertEqual(loaded.save_name, "moraga-1219")
+
+    def test_visual_continuity_serialization(self) -> None:
+        """visual_continuity should be persisted with saves."""
+        state = GameState(
+            starting_location=Location(city="Moraga", region="CA", country="US"),
+            visual_continuity="- Red jacket remains consistent.",
+        )
+
+        data = state.to_dict()
+        self.assertEqual(data["visual_continuity"], "- Red jacket remains consistent.")
+
+        loaded = GameState.from_dict(data)
+        self.assertEqual(loaded.visual_continuity, "- Red jacket remains consistent.")
+
+    def test_image_history_serialization(self) -> None:
+        """Cached image history should be persisted with saves."""
+        state = GameState(
+            starting_location=Location(city="Moraga", region="CA", country="US"),
+            image_history=[
+                ImageHistoryEntry(
+                    id="turn-0001-photo",
+                    turn_index=1,
+                    style_id="photo",
+                    style_name="Photorealistic",
+                    path="images/moraga/turn-0001-photo.png",
+                    prompt="Prompt text",
+                    created_at="2026-05-16T12:00:00-07:00",
+                )
+            ],
+        )
+
+        loaded = GameState.from_dict(state.to_dict())
+
+        self.assertEqual(len(loaded.image_history), 1)
+        self.assertEqual(loaded.image_history[0].style_id, "photo")
+        self.assertEqual(loaded.image_history[0].path, "images/moraga/turn-0001-photo.png")
+
+    def test_pop_last_exchange_clears_visual_continuity_and_images(self) -> None:
+        """Regenerating should not keep stale visual facts or images from a popped turn."""
+        state = GameState(
+            starting_location=Location(city="Moraga", region="CA", country="US"),
+            visual_continuity="- The stranger wears a blue hat.",
+        )
+        state.add_message("user", "Talk to the stranger")
+        state.add_message("assistant", "The stranger removes the blue hat.")
+        state.image_history.append(
+            ImageHistoryEntry(
+                id="turn-0001-photo",
+                turn_index=1,
+                style_id="photo",
+                style_name="Photorealistic",
+                path="images/moraga/turn-0001-photo.png",
+                prompt="Prompt text",
+            )
+        )
+
+        popped = state.pop_last_exchange()
+
+        self.assertEqual(popped, "Talk to the stranger")
+        self.assertIsNone(state.visual_continuity)
+        self.assertEqual(state.image_history, [])
 
 
 if __name__ == "__main__":
