@@ -21,7 +21,7 @@ SEARCH_CACHE_TTL_SECONDS = 300  # 5 minutes (per-session cache)
 
 # --- LLM Settings ---
 MAX_TOOL_ITERATIONS = 10  # Cap tool use loop to prevent infinite loops
-# Opus 4.7 supports a 1M context window. Keep generous headroom below that
+# Opus 5.5 supports a 1M context window. Keep generous headroom below that
 # for response + system prompt, and for avoiding runaway context costs.
 MAX_CONTEXT_TOKENS = 500_000
 # max_tokens is a hard cap on total output INCLUDING thinking tokens. With
@@ -33,16 +33,17 @@ SUMMARIZATION_BUFFER_TOKENS = 1000  # Extra space for summary message
 # Token estimation when API unavailable: ~4 characters per token
 TOKEN_CHAR_ESTIMATE_DIVISOR = 4
 
-# --- Pricing (per million tokens, verified 2026-04 for Claude 4.7 family) ---
-# Opus 4.7: $5 input / $25 output (per platform.claude.com)
-# Sonnet 4.6: $3 input / $15 output
-# Prompt caching: cache writes are 1.25x base input, cache reads are 0.1x.
-OPUS_INPUT_PRICE_PER_MILLION = 5.0
-OPUS_OUTPUT_PRICE_PER_MILLION = 25.0
+# --- Pricing (per million tokens, verified 2026-09-22 on platform.claude.com) ---
+# Opus 5.5: $4 input / $20 output; cache reads are 5% of input (not the usual 10%).
+# Sonnet 4.6: $3 input / $15 output; cache reads are 10% of input.
+# Prompt caching: 5-minute cache writes are 1.25x base input for both.
+OPUS_INPUT_PRICE_PER_MILLION = 4.0
+OPUS_OUTPUT_PRICE_PER_MILLION = 20.0
+OPUS_CACHE_READ_MULTIPLIER = 0.05
 SONNET_INPUT_PRICE_PER_MILLION = 3.0
 SONNET_OUTPUT_PRICE_PER_MILLION = 15.0
+SONNET_CACHE_READ_MULTIPLIER = 0.10
 CACHE_WRITE_MULTIPLIER = 1.25
-CACHE_READ_MULTIPLIER = 0.10
 
 # --- Anthropic client ---
 # SDK retries with exponential backoff on transient errors (5xx, 408, 429,
@@ -50,19 +51,20 @@ CACHE_READ_MULTIPLIER = 0.10
 ANTHROPIC_MAX_RETRIES = 4
 
 # --- Models ---
-PRIMARY_MODEL = os.getenv("RWTA_PRIMARY_MODEL", "claude-opus-4-7")
+PRIMARY_MODEL = os.getenv("RWTA_PRIMARY_MODEL", "claude-opus-5-5")
 FAST_MODEL = os.getenv("RWTA_FAST_MODEL", "claude-sonnet-4-6")
 FALLBACK_MODEL = os.getenv("RWTA_FALLBACK_MODEL", "gpt-5.5")
 
 # --- Adaptive thinking ---
-# Opus 4.7 only supports adaptive thinking (manual budget_tokens is rejected
-# with HTTP 400). Adaptive auto-enables interleaved thinking, which lets the
-# model reason between tool calls — valuable for our search/time/location
-# tool loop. Off by default would forfeit that quality, so default ON.
-# Set RWTA_THINKING=off to disable (e.g., to save output-token spend).
+# Thinking is always on for Opus 5.5: `thinking: {type: "disabled"}` and a
+# manual budget_tokens are both rejected with HTTP 400, and depth is set with
+# output_config.effort. Adaptive thinking lets the model reason between tool
+# calls, which matters for our search/time/location tool loop.
+# RWTA_THINKING=off omits the explicit thinking and effort fields; the model
+# then thinks anyway at the API default effort (medium on Opus 5.5).
 THINKING_MODE = os.getenv("RWTA_THINKING", "adaptive").strip().lower()
-# Effort guidance for adaptive thinking. "high" is the SDK default and means
-# Claude almost always thinks; "low"/"medium" let it skip thinking on simple
+# Effort for adaptive thinking. "medium" is the Opus 5.5 default; "high" means
+# Claude almost always thinks deeply; "low" lets it skip thinking on simple
 # turns, trading depth for latency.
 THINKING_EFFORT = os.getenv("RWTA_THINKING_EFFORT", "medium").strip().lower()
 

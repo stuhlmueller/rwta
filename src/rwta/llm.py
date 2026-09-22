@@ -21,16 +21,17 @@ from anthropic.types import (
 
 from rwta.config import (
     ANTHROPIC_MAX_RETRIES,
-    CACHE_READ_MULTIPLIER,
     CACHE_WRITE_MULTIPLIER,
     FALLBACK_MODEL,
     FAST_MODEL,
     MAX_CONTEXT_TOKENS,
     MAX_RESPONSE_TOKENS,
     MAX_TOOL_ITERATIONS,
+    OPUS_CACHE_READ_MULTIPLIER,
     OPUS_INPUT_PRICE_PER_MILLION,
     OPUS_OUTPUT_PRICE_PER_MILLION,
     PRIMARY_MODEL,
+    SONNET_CACHE_READ_MULTIPLIER,
     SONNET_INPUT_PRICE_PER_MILLION,
     SONNET_OUTPUT_PRICE_PER_MILLION,
     THINKING_EFFORT,
@@ -305,11 +306,13 @@ Summary:"""
         """
         Return ``extra_body`` kwargs that turn on adaptive thinking.
 
-        Adaptive thinking is enabled by default on Opus 4.7 (the only mode it
-        supports) and Sonnet 4.6. We use ``display: "omitted"`` so the API
-        skips streaming thinking text — we don't surface it to the player and
-        omitting cuts time-to-first-text-token. Thinking is suppressed in
-        --fast mode where latency matters more than depth.
+        Thinking is always on for Opus 5.5 (``disabled`` and ``budget_tokens``
+        are rejected with HTTP 400); adaptive is the mode Sonnet 4.6 supports
+        too. We use ``display: "omitted"`` so the API skips streaming thinking
+        text — we don't surface it to the player and omitting cuts
+        time-to-first-text-token. In --fast mode and with RWTA_THINKING=off we
+        send no thinking fields at all, so the model runs at the API default
+        effort (medium on Opus 5.5) instead of ``THINKING_EFFORT``.
 
         Both ``output_config`` and the ``display`` field on ``thinking`` are
         newer than the installed Anthropic SDK's TypedDicts (per the docs:
@@ -754,13 +757,14 @@ Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The wo
         cache_read_tokens: int,
         input_price: float,
         output_price: float,
+        cache_read_multiplier: float,
     ) -> float:
         """Compute spend for one model tier given input/output and cache tokens."""
         return (
             (input_tokens / 1_000_000) * input_price
             + (output_tokens / 1_000_000) * output_price
             + (cache_creation_tokens / 1_000_000) * input_price * CACHE_WRITE_MULTIPLIER
-            + (cache_read_tokens / 1_000_000) * input_price * CACHE_READ_MULTIPLIER
+            + (cache_read_tokens / 1_000_000) * input_price * cache_read_multiplier
         )
 
     def get_session_cost(self) -> float:
@@ -772,6 +776,7 @@ Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The wo
             self.opus_cache_read_tokens,
             OPUS_INPUT_PRICE_PER_MILLION,
             OPUS_OUTPUT_PRICE_PER_MILLION,
+            OPUS_CACHE_READ_MULTIPLIER,
         )
         sonnet_cost = self._model_cost(
             self.sonnet_input_tokens,
@@ -780,6 +785,7 @@ Examples: "Scanning the streets...", "Tuning into the city's rhythm...", "The wo
             self.sonnet_cache_read_tokens,
             SONNET_INPUT_PRICE_PER_MILLION,
             SONNET_OUTPUT_PRICE_PER_MILLION,
+            SONNET_CACHE_READ_MULTIPLIER,
         )
         return opus_cost + sonnet_cost
 

@@ -45,7 +45,7 @@ struct StartMenuView: View {
                 Spacer()
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Label("Claude Opus 4.7 narration", systemImage: "sparkles")
+                    Label("Claude Opus 5.5 narration", systemImage: "sparkles")
                     Label("MapKit live location tracking", systemImage: "map")
                     Label("Cached gpt-image-2 scene art", systemImage: "photo.on.rectangle")
                 }

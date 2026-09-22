@@ -34,15 +34,41 @@ class TestThinkingKwargs(unittest.TestCase):
         self.assertEqual(body["thinking"], {"type": "adaptive", "display": "omitted"})
         self.assertIn("output_config", body)
 
-    def test_fast_mode_disables_thinking(self) -> None:
+    def test_never_sends_disabled_or_budget_thinking(self) -> None:
+        # Opus 5.5 rejects `disabled` and `budget_tokens` with HTTP 400, so the
+        # only shapes we may send are adaptive or nothing at all.
+        for kwargs in (self._kwargs(), self._kwargs(fast=True), self._kwargs(mode="off")):
+            body = kwargs.get("extra_body", {})
+            assert isinstance(body, dict)
+            thinking = body.get("thinking", {})
+            assert isinstance(thinking, dict)
+            self.assertNotEqual(thinking.get("type"), "disabled")
+            self.assertNotIn("budget_tokens", thinking)
+
+    def test_fast_mode_omits_thinking_fields(self) -> None:
         self.assertEqual(self._kwargs(fast=True), {})
 
-    def test_mode_off_disables_thinking(self) -> None:
+    def test_mode_off_omits_thinking_fields(self) -> None:
         self.assertEqual(self._kwargs(mode="off"), {})
 
-    def test_unknown_mode_disables_thinking(self) -> None:
+    def test_unknown_mode_omits_thinking_fields(self) -> None:
         # Defensive: unknown values should not silently enable an invalid mode.
         self.assertEqual(self._kwargs(mode="manual"), {})
+
+
+class TestSessionCost(unittest.TestCase):
+    def test_cache_reads_use_per_model_multiplier(self) -> None:
+        import rwta.llm
+        from rwta.llm import GameNarrator
+
+        n = GameNarrator()
+        n.opus_cache_read_tokens = 1_000_000
+        n.sonnet_cache_read_tokens = 1_000_000
+        expected = (
+            rwta.llm.OPUS_INPUT_PRICE_PER_MILLION * rwta.llm.OPUS_CACHE_READ_MULTIPLIER
+            + rwta.llm.SONNET_INPUT_PRICE_PER_MILLION * rwta.llm.SONNET_CACHE_READ_MULTIPLIER
+        )
+        self.assertAlmostEqual(n.get_session_cost(), expected)
 
 
 class TestVisualContinuityHelpers(unittest.TestCase):

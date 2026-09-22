@@ -119,7 +119,7 @@ respects the same env vars as the CLI).
 | `RWTA_IMAGE_QUALITY` | `low` | `low`, `medium`, `high`, `auto` |
 | `RWTA_IMAGE_STYLE_ID` | `photo` | default image style (`photo`, `monkey_island`, `cinematic_painterly`, `watercolor`, `noir_comic`, `pixel_art`) |
 | `RWTA_TIMEZONE` | `America/Los_Angeles` | in-game clock |
-| `RWTA_PRIMARY_MODEL` | `claude-opus-4-7` | narrator model |
+| `RWTA_PRIMARY_MODEL` | `claude-opus-5-5` | narrator model |
 | `RWTA_FAST_MODEL` | `claude-sonnet-4-6` | loading-message model |
 | `RWTA_FALLBACK_MODEL` | `gpt-5.5` | OpenAI fallback model used by the retry button after narrator failures |
 | `RWTA_LOG_LEVEL` | `WARNING` | logged on stderr |
