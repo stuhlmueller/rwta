@@ -45,8 +45,8 @@ cd rwta
 pip install -e .
 
 # For development (includes ruff, pyright, pytest, pre-commit)
-pip install -e ".[dev]"
-pre-commit install
+uv sync --group dev
+uv run pre-commit install
 ```
 
 ## Configuration

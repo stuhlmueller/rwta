@@ -1,4 +1,4 @@
-.PHONY: lint format typecheck test check
+.PHONY: install lint format typecheck test check
 
 lint:
 	uv run ruff check --fix src tests
@@ -13,3 +13,7 @@ test:
 	uv run python -m pytest
 
 check: lint format typecheck test
+
+install:
+	uv sync --group dev
+	uv run pre-commit install
