@@ -49,6 +49,8 @@ uv sync --group dev
 uv run pre-commit install
 ```
 
+`make check` runs ruff, pyright and pytest; CI (`.github/workflows/check.yml`) runs the same checks on every push.
+
 ## Configuration
 
 Set your Anthropic API key:
