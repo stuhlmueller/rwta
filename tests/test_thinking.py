@@ -71,6 +71,26 @@ class TestSessionCost(unittest.TestCase):
         self.assertAlmostEqual(n.get_session_cost(), expected)
 
 
+class TestFastModel(unittest.TestCase):
+    def test_fast_model_is_sonnet_5_5_at_its_prices(self) -> None:
+        import importlib
+        import os
+        from unittest import mock
+
+        import rwta.config
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RWTA_FAST_MODEL", None)
+            config = importlib.reload(rwta.config)
+            self.assertEqual(config.FAST_MODEL, "claude-sonnet-5-5")
+        # Sonnet 5.5: $2 input / $10 output, cache reads $0.20 (10% of input).
+        self.assertEqual(config.SONNET_INPUT_PRICE_PER_MILLION, 2.0)
+        self.assertEqual(config.SONNET_OUTPUT_PRICE_PER_MILLION, 10.0)
+        self.assertAlmostEqual(
+            config.SONNET_INPUT_PRICE_PER_MILLION * config.SONNET_CACHE_READ_MULTIPLIER, 0.2
+        )
+
+
 class TestVisualContinuityHelpers(unittest.TestCase):
     def test_clean_visual_ledger_removes_empty_bullets(self) -> None:
         from rwta.llm import GameNarrator

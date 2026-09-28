@@ -307,7 +307,7 @@ Summary:"""
         Return ``extra_body`` kwargs that turn on adaptive thinking.
 
         Thinking is always on for Opus 5.5 (``disabled`` and ``budget_tokens``
-        are rejected with HTTP 400); adaptive is the mode Sonnet 4.6 supports
+        are rejected with HTTP 400); adaptive is the mode Sonnet 5.5 supports
         too. We use ``display: "omitted"`` so the API skips streaming thinking
         text — we don't surface it to the player and omitting cuts
         time-to-first-text-token. In --fast mode and with RWTA_THINKING=off we

@@ -65,7 +65,7 @@ Optional environment variables:
 |----------|---------|-------------|
 | `RWTA_TIMEZONE` | `America/Los_Angeles` | IANA timezone for in-game time |
 | `RWTA_PRIMARY_MODEL` | `claude-opus-5-5` | Primary LLM model for narration |
-| `RWTA_FAST_MODEL` | `claude-sonnet-4-6` | Fast model for loading messages and summaries |
+| `RWTA_FAST_MODEL` | `claude-sonnet-5-5` | Fast model for loading messages and summaries |
 | `RWTA_FALLBACK_MODEL` | `gpt-5.5` | OpenAI model used by the Mac app's retry button if the narrator fails |
 | `RWTA_THINKING` | `adaptive` | Thinking mode for the primary model: `adaptive` sends explicit thinking and effort fields; `off` sends none. Thinking is always on for Opus 5.5, so `off` means the API default effort (medium). |
 | `RWTA_THINKING_EFFORT` | `medium` | How much to think when adaptive: `low`, `medium`, `high`, `xhigh`, `max`. |
